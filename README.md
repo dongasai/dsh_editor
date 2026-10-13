@@ -1,4 +1,4 @@
-# 工作区文件编辑器（`@local/dsh-plugin-workspace-editor`）
+# 工作区文件编辑器（`@local/dsh-editor`）
 
 DSH Web GUI 里，右侧栏的文件预览一直只能**看**：官方 `@deepseek-ai/dsh-client-ui-sidebar-documentpreview`
 注册的 Markdown / 代码 / 图片 / PDF / Office / 表格渲染器全部只读，读文件的 Remote
@@ -14,18 +14,19 @@ DSH Web GUI 里，右侧栏的文件预览一直只能**看**：官方 `@deepsee
    .yaml .yml .toml .ini .cfg .conf .config .env .properties .lock`
    —— 官方对这些文件本来也只有只读纯文本/代码预览，所以直接给编辑器当默认视图。
 3. **其它文本/代码文件**（`.md .ts .py .sh .html .css .sql .csv` …）：默认仍是官方的排版/
-   高亮预览。要编辑，**点预览工具栏上的「✎ 编辑」按钮** —— 它会对当前文件在同一个面板里
-   开一个编辑器页签（同一个文件只有一个，再点就是聚焦它）。也可以走**「打开方式」下拉**
-   选「编辑器」，那是就地换渲染器，选择按标签页记住。
+   高亮预览。要编辑，**点预览工具栏上的「✎ 编辑」按钮** —— 它用编辑器页签**顶掉**这张预览
+   页签（同一个面板、同一个位置）；该文件的编辑器页签已经开着时只聚焦它。也可以走
+   **「打开方式」下拉**选「编辑器」，那是就地换渲染器，选择按标签页记住。
 4. 改完点**「保存」**，或按 **Ctrl/Cmd+S**。
 
 状态条会显示「已与磁盘同步 / 未保存的修改 / 保存中… / 已保存」；标题栏右侧是
 「重新加载」（丢弃本地修改、重读磁盘）与「保存」。编辑器页签里多一个「换行：开/关」
 （页签窄，默认开）。
 
-> 「✎ 编辑」按钮开的是**页签**而不是就地切换渲染器：预览用哪个渲染器由文档预览自己的
+> 「✎ 编辑」按钮换的是**页签**而不是就地切换渲染器：预览用哪个渲染器由文档预览自己的
 > store 决定（`state.rendererId`），外部插件没有公开的写入入口；右侧栏的页签类型是公开的，
-> 所以按钮走 `ctx.sidebarRight.openResource(address, { kind: 'workspace-editor' })`。
+> 所以按钮走 `ctx.sidebarRight.openResource(address, { kind: 'workspace-editor', replaceTab })`。
+> 想回预览：从文件树再点一次该文件（会开新的预览页签）。
 > 编辑器页签类型刻意声明了一个**命中不了任何真实地址**的 pattern，因此它永远不会参与
 > 自动排名 —— 普通打开文件仍旧是官方预览，编辑器只在按钮/显式打开时出现。
 
@@ -128,8 +129,8 @@ Agent 写文件。
   不丢、不覆盖"。
 - 没有扩展名的文件（`Makefile`、`LICENSE`）匹配不到任何渲染器，默认视图仍是官方只读
   纯文本；但只要它能在预览里显示 Host 路径，「✎ 编辑」按钮就在，点一下照样能编辑。
-- 「✎ 编辑」按钮开的是**编辑器页签**（与预览并列），不能把预览就地换成编辑器 ——
-  后者的开关在文档预览自己的 store 里，外部插件没有公开入口。
+- 点「✎ 编辑」会把**预览页签换成编辑器页签**，不能把预览就地换成编辑器正文 ——
+  后者的开关在文档预览自己的 store 里，外部插件没有公开入口。想回预览：从文件树再点该文件。
 - 文件树本身仍然只读（不改官方 `ui-sidebar-files`），改名/删除/新建仍走终端或 Agent。
 
 ## 怎么验证
@@ -138,9 +139,9 @@ Agent 写文件。
 
 1. `.json` / `.yaml` / `.txt` 默认就是编辑器：底部状态条显示「已与磁盘同步」，改一个字变
    「未保存的修改」且「保存」变品牌色，点「保存」或 Ctrl/Cmd+S 变「已保存」，磁盘同步变化。
-2. 打开一个 `.md` 或 `.ts`（默认是官方预览），点工具栏上的**「✎ 编辑」** —— 同一个面板里
-   应出现一个标题为「编辑 main.ts」的页签，正文是可编辑文本；再点一次按钮只会聚焦它，
-   不会开出第二个。
+2. 打开一个 `.md` 或 `.ts`（默认是官方预览），点工具栏上的**「✎ 编辑」** —— 同一张页签
+   应变成标题为「编辑 main.ts」的编辑器页签（位置不变、不新增页签），正文可编辑；
+   该文件的编辑器页签已开着时再点只聚焦，不会开出第二个。
 3. 编辑器页签里点「换行：开/关」应在自动换行与横向滚动间切换。
 
 命令行能覆盖的部分（已在本机实测）：
@@ -148,8 +149,8 @@ Agent 写文件。
 | 检查 | 结果 |
 |---|---|
 | Loader 行激活 | `list_plugins` → `include:workspace-editor` / `enabled: true` / `fiberPhase: active`（`apply()` 跑完、7 个注入服务都在） |
-| 渲染器注册 | Client `Slots.listSubTree` on `sidebar.right.tab.document` → occupants 里出现 `@local/dsh-plugin-workspace-editor/text` 与 `.../text-option`，`active: true` |
-| 编辑器页签注册 | `Slots.listSubTree` on `sidebar.right.pane.tab` → occupants 里出现 `@local/dsh-plugin-workspace-editor/tab`，`active: true` |
+| 渲染器注册 | Client `Slots.listSubTree` on `sidebar.right.tab.document` → occupants 里出现 `@local/dsh-editor/text` 与 `.../text-option`，`active: true` |
+| 编辑器页签注册 | `Slots.listSubTree` on `sidebar.right.pane.tab` → occupants 里出现 `@local/dsh-editor/tab`，`active: true` |
 | 「编辑」按钮注册 | `Slots.listSubTree` on `sidebar.right.tab.document.actions` → occupants 里出现 `{id: workspace-editor, order: 5}`，`active: true` |
 | 页签类型注册 | 按钮的注册在 `ctx.sidebarRightTabs.register(...)` **之后**执行且成功 ⇒ 类型注册没抛错（同一 `apply` 内） |
 | 信任围栏 | 无认证的 `POST /workspace-editor/write` 被拒（403），不会落到 SPA fallback |

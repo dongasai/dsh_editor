@@ -1,5 +1,5 @@
 /**
- * @module @local/dsh-plugin-workspace-editor/client
+ * @module @local/dsh-editor/client
  *
  * **工作区文件编辑器 —— 浏览器半边**。给右侧栏补上「改」的能力，一共三个入口，
  * 共用同一份可编辑正文（`EditorSurface`）：
@@ -10,18 +10,20 @@
  * 2. **文档渲染器（可选档，`priority: 'builtin'`）**：代码 / 文档类扩展名。官方已有更合适的
  *    只读渲染器（Markdown 排版、代码高亮 + 行号定位），编辑器只作为「打开方式」下拉里的
  *    一个选项出现，不抢默认。
- * 3. **「编辑」按钮 + 编辑器页签**：预览工具栏上的按钮，对**任何文本文件**一键在右侧栏
- *    开一个编辑器页签（同一个文件只有一个，再点就聚焦它）。这是给 `.md` / `.ts` 这类
- *    「默认不进编辑器」的文件准备的快捷入口 —— 不用去「打开方式」下拉里翻。
+ * 3. **「编辑」按钮 + 编辑器页签**：预览工具栏上的按钮，对**任何文本文件**一键进编辑器 ——
+ *    它用编辑器页签**顶掉**当前那张预览页签（同一个面板、同一个位置，`replaceTab`），
+ *    该文件的编辑器页签已经开着时就聚焦它。这是给 `.md` / `.ts` 这类「默认不进编辑器」的
+ *    文件准备的快捷入口 —— 不用去「打开方式」下拉里翻。
  *
- * ## 为什么按钮开的是「页签」而不是「就地切换渲染器」
+ * ## 为什么按钮是「换页签」而不是「就地切换渲染器」
  *
  * 预览用哪个渲染器由文档预览自己的 store 决定（`selected = candidates.find(id ===
  * state.rendererId) ?? candidates[0]`），`state.rendererId` 只有它自己的下拉能写，外部插件
- * 没有公开入口 —— 所以「原地把预览切成编辑器」做不到。右侧栏的**页签**是公开的：
+ * 没有公开入口 —— 所以「原地把预览换成编辑器」做不到。右侧栏的**页签**是公开的：
  * `ctx.sidebarRightTabs.register` 注册一个 kind，`ctx.sidebarRight.openResource(address,
- * { kind })` 显式打开它（侧边栏的 `claim(address, kind)` 只查 `canOpen`、**不查 patterns**），
- * 于是编辑器页签既不会跟官方预览抢自动打开的文件，又能一键到达。
+ * { kind, replaceTab })` 显式打开它并顶掉当前页签（侧边栏的 `claim(address, kind)` 只查
+ * `canOpen`、**不查 patterns**），于是编辑器页签既不会跟官方预览抢自动打开的文件，又能
+ * 一键到达、且不留下两张同文件的页签。
  *
  * ## 数据不丢的三条规矩（改代码时别踩）
  *
@@ -38,7 +40,7 @@
  */
 
 window.__ModuleLoader__.load({
-  id: '@local/dsh-plugin-workspace-editor',
+  id: '@local/dsh-editor',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -83,9 +85,9 @@ window.__ModuleLoader__.load({
     const EDITOR_TAB_PATTERN = 'dsh-resource://workspace-editor/**'
 
     /** 两档渲染器与页签类型的 id（正文组件同一份，注册在各自的槽位里）。 */
-    const DEFAULT_RENDERER_ID = '@local/dsh-plugin-workspace-editor/text'
-    const OPTIONAL_RENDERER_ID = '@local/dsh-plugin-workspace-editor/text-option'
-    const EDITOR_TAB_ID = '@local/dsh-plugin-workspace-editor/tab'
+    const DEFAULT_RENDERER_ID = '@local/dsh-editor/text'
+    const OPTIONAL_RENDERER_ID = '@local/dsh-editor/text-option'
+    const EDITOR_TAB_ID = '@local/dsh-editor/tab'
 
     /** 编辑器页签的 kind（`openResource(address, { kind })` 里用的名字）。 */
     const EDITOR_KIND = 'workspace-editor'
@@ -685,7 +687,8 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * 预览头部的「编辑」按钮：在同一个面板里打开（或聚焦）这个文件的编辑器页签。
+       * 预览头部的「编辑」按钮：用编辑器页签**顶掉**这张预览页签（同一个面板、同一个位置），
+       * 该文件的编辑器页签已经开着时就聚焦它。
        * @param props - `sidebar.right.tab.document.actions` 交来的 props（含 `absolutePath`）。
        * @returns 按钮，或没有 Host 路径时不渲染。
        */
@@ -693,13 +696,16 @@ window.__ModuleLoader__.load({
         const { absolutePath, sessionId, t } = props
         if (typeof absolutePath !== 'string' || absolutePath === '') return null
         const open = (event) => {
-          // 用按钮所在的真实 DOM 位置问出面板与页签：这样编辑器落在用户正在看的那个面板里，
-          // 而不是「当前活动的停靠面板」。
+          // 用按钮所在的真实 DOM 位置问出面板与页签：只有拿得到当前页签才能「顶掉」它；
+          // 问不到（浮动面板等）就退回「当前活动的停靠面板」，在旁边开一个。
           const target = ctx.sidebarRight.commandTarget(event.currentTarget)
           const owner = target?.sessionId ?? sessionId
+          const placement = target?.tabId === undefined
+            ? target?.paneId === undefined ? {} : { paneId: target.paneId }
+            : { replaceTab: target.tabId }
           ctx.sidebarRight.openResource(absoluteFileAddress(absolutePath), {
             kind: EDITOR_KIND,
-            ...target?.paneId === undefined ? {} : { paneId: target.paneId },
+            ...placement,
             params: { sessionId: owner, path: absolutePath },
           })
         }
