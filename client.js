@@ -1,5 +1,5 @@
 /**
- * @module @local/dsh-editor/client
+ * @module @dongasai/dsh-editor/client
  *
  * **工作区文件编辑器 —— 浏览器半边**。给右侧栏补上「改」的能力，一共三个入口，
  * 共用同一份可编辑正文（`EditorSurface`）：
@@ -40,7 +40,7 @@
  */
 
 window.__ModuleLoader__.load({
-  id: '@local/dsh-editor',
+  id: '@dongasai/dsh-editor',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -85,9 +85,9 @@ window.__ModuleLoader__.load({
     const EDITOR_TAB_PATTERN = 'dsh-resource://workspace-editor/**'
 
     /** 两档渲染器与页签类型的 id（正文组件同一份，注册在各自的槽位里）。 */
-    const DEFAULT_RENDERER_ID = '@local/dsh-editor/text'
-    const OPTIONAL_RENDERER_ID = '@local/dsh-editor/text-option'
-    const EDITOR_TAB_ID = '@local/dsh-editor/tab'
+    const DEFAULT_RENDERER_ID = '@dongasai/dsh-editor/text'
+    const OPTIONAL_RENDERER_ID = '@dongasai/dsh-editor/text-option'
+    const EDITOR_TAB_ID = '@dongasai/dsh-editor/tab'
 
     /** 编辑器页签的 kind（`openResource(address, { kind })` 里用的名字）。 */
     const EDITOR_KIND = 'workspace-editor'

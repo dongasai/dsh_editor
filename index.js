@@ -1,5 +1,5 @@
 /**
- * @module @local/dsh-editor
+ * @module @dongasai/dsh-editor
  *
  * **工作区文件编辑器 —— Host 半边**：给 Web GUI 提供唯一一条「写工作区文件」的入口，
  * 浏览器那半边（`./client.js`）在右侧栏的文件预览里渲染一个可编辑、可保存的正文。

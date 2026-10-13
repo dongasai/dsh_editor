@@ -1,4 +1,4 @@
-# 工作区文件编辑器（`@local/dsh-editor`）
+# 工作区文件编辑器（`@dongasai/dsh-editor`）
 
 DSH Web GUI 里，右侧栏的文件预览一直只能**看**：官方 `@deepseek-ai/dsh-client-ui-sidebar-documentpreview`
 注册的 Markdown / 代码 / 图片 / PDF / Office / 表格渲染器全部只读，读文件的 Remote
@@ -149,8 +149,8 @@ Agent 写文件。
 | 检查 | 结果 |
 |---|---|
 | Loader 行激活 | `list_plugins` → `include:workspace-editor` / `enabled: true` / `fiberPhase: active`（`apply()` 跑完、7 个注入服务都在） |
-| 渲染器注册 | Client `Slots.listSubTree` on `sidebar.right.tab.document` → occupants 里出现 `@local/dsh-editor/text` 与 `.../text-option`，`active: true` |
-| 编辑器页签注册 | `Slots.listSubTree` on `sidebar.right.pane.tab` → occupants 里出现 `@local/dsh-editor/tab`，`active: true` |
+| 渲染器注册 | Client `Slots.listSubTree` on `sidebar.right.tab.document` → occupants 里出现 `@dongasai/dsh-editor/text` 与 `.../text-option`，`active: true` |
+| 编辑器页签注册 | `Slots.listSubTree` on `sidebar.right.pane.tab` → occupants 里出现 `@dongasai/dsh-editor/tab`，`active: true` |
 | 「编辑」按钮注册 | `Slots.listSubTree` on `sidebar.right.tab.document.actions` → occupants 里出现 `{id: workspace-editor, order: 5}`，`active: true` |
 | 页签类型注册 | 按钮的注册在 `ctx.sidebarRightTabs.register(...)` **之后**执行且成功 ⇒ 类型注册没抛错（同一 `apply` 内） |
 | 信任围栏 | 无认证的 `POST /workspace-editor/write` 被拒（403），不会落到 SPA fallback |
