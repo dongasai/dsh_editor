@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Workspace File Editor",
+    "description": "Edit and save workspace files right in the sidebar's file preview: the shipped renderers are read-only, this plugin adds the writing half."
+  }
+}

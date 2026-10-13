@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Workspace file editor">
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#247bbf" fill-opacity="0.12" />
+  <path d="M9.5 23.4V10.6c0-1.2 1-2.1 2.1-2.1h5.9l5.2 5.2v9.7c0 1.2-1 2.1-2.1 2.1h-9c-1.2 0-2.1-.9-2.1-2.1Z" fill="none" stroke="#247bbf" stroke-width="1.6" stroke-linejoin="round" />
+  <path d="M17.2 8.6v5.3h5.4" fill="none" stroke="#247bbf" stroke-width="1.6" stroke-linejoin="round" />
+  <path d="M13.2 20.4h5.6" stroke="#247bbf" stroke-width="1.6" stroke-linecap="round" />
+  <path d="M20.6 24.6l1-3.1 4.4-4.4 2.1 2.1-4.4 4.4-3.1 1Z" fill="#247bbf" fill-opacity="0.9" />
+</svg>

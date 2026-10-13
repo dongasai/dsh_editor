@@ -1,0 +1,38 @@
+{
+  "name": "@local/dsh-plugin-workspace-editor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Edit and save workspace files in the DSH web GUI: an editable document renderer plus one trusted host write route.",
+  "icon": "./icon.svg",
+  "meta": {
+    "title": "工作区文件编辑器",
+    "description": "在右侧栏的文件预览里直接编辑并保存工作区文件：官方渲染器只读，这个插件补上「改」的那一步。"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar-documentpreview",
+        "@deepseek-ai/dsh-api-workspace-files"
+      ]
+    }
+  }
+}

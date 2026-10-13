@@ -1,0 +1,4 @@
+# 插件以 `link:` 方式装进 dsh profile，仓库里不需要任何构建产物。
+node_modules/
+*.log
+.DS_Store
