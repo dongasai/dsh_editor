@@ -3,11 +3,12 @@
 在 DSH Web GUI 的右侧栏里**直接把工作区文件改掉**：官方文档预览注册的 Markdown / 代码 /
 图片 / PDF / Office 渲染器全部只读，读文件的 Remote 命名空间
 `@deepseek-ai/dsh-api-workspace-files` 也明确写着 *"The service exposes no mutation operation."*，
-这个插件补上**写**的那一半 —— 可编辑的正文、保存按钮、未保存状态与冲突处理，外加一条
-只服务于它的 Host 写路由。
+这个插件补上**写**与**删**的那一半 —— 可编辑的正文、保存按钮、未保存状态与冲突处理，预览头部
+的「🗑 删除」按钮（两次点击确认），外加只服务于它们的两条 Host 路由。
 
 与「用终端 / 让 Agent 改」的差别不是快慢，而是**谁在改**：人在 GUI 里改完点保存，
-版本闸记得住「你读到的是哪一版」，磁盘中途被模型改过就停下来问，不静默覆盖。
+版本闸记得住「你读到的是哪一版」，磁盘中途被模型改过就停下来问，不静默覆盖；
+删除同样带版本闸 —— 你确认期间文件被改过就停下来，要删得再点一次「仍然删除」。
 
 - **怎么用插件** → 本文件（安装、怎么进编辑器、线上协议、排错、已知边界）。
 - **为什么这么实现** → [IMPLEMENTATION.md](IMPLEMENTATION.md)（设计决策、两半怎么拼起来、
@@ -97,6 +98,9 @@ dsh plugin --profile web add link:/data/ai/dsh/dsh_editor
    页签（同一个面板、同一个位置）；该文件的编辑器页签已经开着时只聚焦它。也可以走
    **「打开方式」下拉**选「编辑器」，那是就地换渲染器，选择按标签页记住。
 4. 改完点**「保存」**，或按 **Ctrl/Cmd+S**。
+5. **要删掉这个文件**：点预览工具栏上的**「🗑 删除」**（在「✎ 编辑」右边）。第一下只是把它
+   变成「确认删除」，第二下才真的删 —— 中间那几秒里如果你不点，它会自己变回「删除」。
+   删掉的文件**不进回收站**，页签会随之关掉，文件树里那一行也会消失（树自己盯着变更）。
 
 ### 3. 确认它真的在工作
 
@@ -120,6 +124,8 @@ dsh plugin --profile web add link:/data/ai/dsh/dsh_editor
 - **磁盘变了**（模型或别的工具改了同一个文件）：不会覆盖你正在编辑的内容，改为顶部横幅
   提示，让你选「加载磁盘版本」还是「继续编辑」。
 - **保存时磁盘变过**：Host 的版本闸会拒绝，横幅里让你选「覆盖保存」或「加载磁盘版本」。
+- **删除时磁盘变过**：从你点「删除」到点「确认删除」之间文件被改过，Host 一样会拒绝 ——
+  按钮变成「仍然删除」，要删得再点一下，不会稀里糊涂删掉别人刚写的东西。
 - **切到别的标签页、或关掉编辑器页签再打开**：未保存的草稿还在（草稿按
   `会话 + 路径` 缓存在浏览器内存里）。
 - **读盘临时失败**：已经显示着正文时只挂一条提示，不把正文擦掉（磁盘抽风不该毁掉草稿）。
@@ -128,8 +134,8 @@ dsh plugin --profile web add link:/data/ai/dsh/dsh_editor
 
 | 文件 | 作用 |
 |---|---|
-| [index.js](index.js) | **Host 半边**：注册 `POST /workspace-editor/write`，做信任围栏、路径围栏、沙箱策略、版本闸与原子写。只 import `node:` 内置模块。 |
-| [client.js](client.js) | **浏览器半边**：两档文档渲染器 + 编辑器页签类型 + 预览头部的「编辑」按钮，共用同一份可编辑正文 `EditorSurface`。 |
+| [index.js](index.js) | **Host 半边**：注册 `POST /workspace-editor/write` 与 `POST /workspace-editor/delete`，做信任围栏、路径围栏、沙箱策略、版本闸，写走原子写、删走 `unlink`。只 import `node:` 内置模块。 |
+| [client.js](client.js) | **浏览器半边**：两档文档渲染器 + 编辑器页签类型 + 预览头部的「编辑」「删除」按钮，共用同一份可编辑正文 `EditorSurface`。 |
 | [cordis.patch.yml](cordis.patch.yml) | 只插入一行插件；浏览器半边由 `package.json` 的 `dsh.client` 声明，由 dsh-client-modules 扫出来。 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client`。 |
 | [locale/{zh,en}.json](locale/zh.json) | 插件卡片上的显示名与说明。 |
@@ -146,7 +152,7 @@ Host 半边 `inject`：`webServer` / `connection` / `fs` / `sandboxPolicy` / `se
 | `sidebar.right.tab.document` | 上面两个 id 的正文 |
 | `ctx.sidebarRightTabs.register` | kind `workspace-editor`，id `@dongasai/dsh-editor/tab`，pattern 命中不了真实地址 |
 | `sidebar.right.pane.tab` | 该 id 的页签正文（编辑器） |
-| `sidebar.right.tab.document.actions` | id `workspace-editor`、`order: 5` 的「✎ 编辑」按钮 |
+| `sidebar.right.tab.document.actions` | id `workspace-editor`、`order: 5` 的「✎ 编辑」按钮；id `workspace-editor-delete`、`order: 6` 的「🗑 删除」按钮 |
 
 ## 哪些文件能进编辑器
 
@@ -166,7 +172,7 @@ Host 半边 `inject`：`webServer` / `connection` / `fs` / `sandboxPolicy` / `se
 
 ## 线上协议
 
-请求：
+写请求：
 
 ```http
 POST /workspace-editor/write
@@ -183,24 +189,40 @@ content-type: application/json
 
 成功（200）：`{ "ok": true, "path": "/abs/path", "operation": "create" | "update", "version": "…", "bytes": 123 }`
 
-失败：`{ "code": "…", "message": "…", "fsCode": "…" }`，HTTP 状态按码给出：
+删请求：
+
+```http
+POST /workspace-editor/delete
+content-type: application/json
+
+{
+  "sessionId": "session-3",
+  "path": "src/main.ts",
+  "expectedVersion": "…"             // 点「删除」时看到的版本；省略 = 无条件删除（用户点过「仍然删除」）
+}
+```
+
+成功（200）：`{ "ok": true, "path": "/abs/path", "operation": "delete" }`
+
+失败：`{ "code": "…", "message": "…", "fsCode": "…" }`，HTTP 状态按码给出。两条路由共用下表，
+「写 / 删」列标出只在某一条上出现的含义：
 
 | code | HTTP | 含义 |
 |---|---|---|
 | `bad-request` | 400 | 请求体不是 JSON 对象、字段类型不对（`sessionId` / `path` 必须是非空字符串，`content` 必须是字符串） |
 | `outside-workspace` | 403 | 目标不在该会话的工作区内 |
-| `denied` | 403 | 会话沙箱策略拒绝（`read-only` 会话、部署默认 `workspace-write` 之外的路径） |
+| `denied` | 403 | 沙箱策略拒绝（`read-only` 会话；写由 `ctx.fs` 判，删由插件按 `ctx.sandboxPolicy.resolve` 自己判） |
 | `unknown-session` | 404 | 这个 Host 既不认识活会话，也没有它的存档头 |
-| `not-found` | 404 | 目标不存在（`create` 之外的模式） |
-| `stale-version` | 409 | 磁盘上的文件在编辑期间变过（含「文件已被删除」）——UI 会提示「覆盖保存」 |
-| `not-observed` | 409 | `create` 模式下文件已存在 |
-| `not-regular-file` | 409 | 目标是目录、符号链接等非普通文件 |
+| `not-found` | 404 | 目标不存在（写：`create` 之外的模式；删：文件已经不在了） |
+| `stale-version` | 409 | 磁盘上的文件变过（写：编辑期间；删：确认期间）或已被删除 —— UI 写提示「覆盖保存」、删提示「仍然删除」 |
+| `not-observed` | 409 | 写：`create` 模式下文件已存在 |
+| `not-regular-file` | 409 | 写 / 删：目标是目录、符号链接等非普通文件（删除不递归、不跟软链） |
 | `not-directory` | 409 | 路径中间的一段不是目录 |
-| `too-large` | 413 | 请求体（8 MiB）或内容（4 MiB 字符）超限 |
+| `too-large` | 413 | 请求体（8 MiB）或内容（4 MiB 字符）超限（仅写） |
 | `unsupported-media-type` | 415 | 不是 `application/json` |
 | `not-text` | 415 | 底层文件系统策略判定不是文本（本插件读盘走 `readBytes`，**不做**文本判定，所以这一条只在底层拒绝时出现；非 UTF-8 / 含 NUL 的文件通常由浏览器侧的 `TextDecoder` 先判掉，见「已知边界」） |
 | `aborted` | 408 | 客户端断开或超过 30s 墙钟上限 |
-| `write-failed` / `io-error` | 500 | 其它文件系统故障（原始信息在 `message`） |
+| `write-failed` / `delete-failed` / `io-error` | 500 | 其它文件系统故障（原始信息在 `message`；`delete-failed` 是删路由上未映射的 `unlink` 失败） |
 
 其它方法一律 `405` 并带 `allow: POST`；所有应答都带 `cache-control: no-store`。
 
@@ -214,11 +236,13 @@ content-type: application/json
 2. **路径围栏**：目标解析后必须落在**该会话的工作区根**之内
    （`ctx.fs.contains(会话根, 目标)`），并且最终节点不能是符号链接（`lstat` 检查），
    想借软链写穿出去会被 403 挡住。
-3. **沙箱策略围栏**：写入显式带上 `ctx.sandboxPolicy.resolve({ session })`，
-   由组合文件系统 `ctx.fs` 再判一次（`read-only` 会话一律拒绝，`workspace-write` 只放行
-   工作区内与平台临时区）。
-4. **版本闸**：`expectedVersion` 走 `FsWriteIntent.replaceIfVersion`
-   （或 `createIfAbsent`），写入是原子的；版本不符就 `FS_STALE_VERSION`，绝不静默覆盖。
+3. **沙箱策略围栏**：写入显式带上 `ctx.sandboxPolicy.resolve({ session })`，由组合文件系统
+   `ctx.fs` 再判一次（`read-only` 会话一律拒绝，`workspace-write` 只放行工作区内与平台临时区）。
+   **删除没有这层自动保护** —— `ctx.fs` 没有删除接口，删走 `node:fs` 的 `unlink`，所以插件
+   按同一份 `ctx.sandboxPolicy.resolve({ session })` 自己判 `read-only`。
+4. **版本闸**：`expectedVersion` 写时走 `FsWriteIntent.replaceIfVersion`（或 `createIfAbsent`），
+   写入是原子的；删时在 `unlink` 之前逐字比对同一个版本令牌。版本不符就 `FS_STALE_VERSION`，
+   绝不静默覆盖、也绝不静默删除。
 
 边界说明：**这不是**内核级隔离。DSH 的文件沙箱本身是「可信代码对不可信路径」的包含性检查
 （官方注释原话：*containment, not a security boundary*），本插件与官方 Agent 的 `write`
@@ -243,6 +267,12 @@ Agent 写文件。
 | 症状 | 原因 | 处置 |
 |---|---|---|
 | 打开文件只有只读预览，没有「✎ 编辑」按钮 | 该文件没匹配到任何渲染器，预览头部的 actions 槽位没挂上（没有扩展名的文件是典型） | 换文件名加扩展名，或从「打开方式」下拉选「编辑器」 |
+| 预览工具栏上没有「🗑 删除」按钮 | 同上：这一条也注册在 `sidebar.right.tab.document.actions` 槽位，槽位没挂就没有；编辑器页签里也没有（编辑器不是官方预览） | 回到该文件的预览页签再删，或用终端 / Agent 删 |
+| 删除报「文件已变更，未删除」 | 版本闸生效：从你点「删除」到点「确认删除」之间文件被改过 | 看一眼是不是模型在写；确认要删就再点「仍然删除」 |
+| 删除报 404 `not-found` | 文件已经不在了（模型 / 别的工具刚删掉，或本来就不是文件） | 页签可以直接关掉；刷新文件树 |
+| 删除报 403 `denied` / `outside-workspace` | 会话是 `read-only` 沙箱，或目标不在该会话工作区内 | 换可写会话，或确认文件属于当前工作区 |
+| 删除报「删除请求没有到达 Host」 | 请求根本没到（网络 / 页面 / 反向代理） | 文件没有被删除，重试即可；连着必现就看代理是否拦了 `/workspace-editor/delete` |
+| 删除报「Host 侧还没有这条删除路由」 | 改过 `index.js` 但只刷新了页面：这条路由还没注册，静态 fallback 对 POST 回 405 | **重启 Harness**；文件没有被删除 |
 | 「打开方式」下拉里没有「编辑器」 | 该扩展名不在 `OPTIONAL_EXTENSIONS` 里 | 直接点「✎ 编辑」按钮；要长期支持就在 `client.js` 里加扩展名 |
 | 状态条一直是「读取中…」然后转成读取失败 | 该会话 / 路径读不出来（文件被删、权限、不是文本） | 文案里有 Host 的原始说明；不是 UTF-8、含 NUL 或超过 1 MiB 的文件本来就只能只读看 |
 | 保存后横幅说「磁盘上的文件在编辑期间变过」 | 版本闸生效：内容被模型或别的工具改过 | 选「加载磁盘版本」看对方改了什么，或确认要覆盖再点「覆盖保存」 |
@@ -277,6 +307,7 @@ Agent 写文件。
 | 渲染器注册 + 正文 | Client provider `Slots`.`listSubTree`，`root: sidebar.right.tab.document` | occupants 里出现 `@dongasai/dsh-editor/text` 与 `.../text-option`，`active: true` |
 | 编辑器页签注册 + 正文 | 同上，`root: sidebar.right.pane.tab` | occupants 里出现 `@dongasai/dsh-editor/tab`，`active: true` |
 | 「编辑」按钮注册 | 同上，`root: sidebar.right.tab.document.actions` | occupants 里出现 `{ id: workspace-editor, order: 5 }`，`active: true` |
+| 「删除」按钮注册 | 同上，`root: sidebar.right.tab.document.actions` | occupants 里出现 `{ id: workspace-editor-delete, order: 6 }`，`active: true`（排在「编辑」后面） |
 | 页签类型注册 | 「编辑」按钮的注册在 `ctx.sidebarRightTabs.register(...)` **之后**执行且成功 | 类型注册没抛错（同一 `apply` 内，上一条通过即蕴含） |
 
 > Client provider 的查询要等页面回一次响应（Host 转发），所以页面得开着；超时说明没有活页面。
@@ -285,8 +316,8 @@ Agent 写文件。
 
 | 检查 | 手段 | 期望 |
 |---|---|---|
-| 信任围栏 | 无认证的 `POST /workspace-editor/write` | 被拒（403），不会落到 SPA fallback |
-| 路由存在性 | 同一个 URL 用 `GET` | `405` + `allow: POST`（而不是 SPA 的 HTML） |
+| 信任围栏 | 无认证的 `POST /workspace-editor/write`、`POST /workspace-editor/delete` | 都被拒（403），不会落到 SPA fallback |
+| 路由存在性 | 这两个 URL 用 `GET` | 各自 `405` + `allow: POST`（而不是 SPA 的 HTML） |
 
 本机 profile 装了 `@xgone/dsh-remote` 时，从 shell 打这两条会先撞上它的会话门禁（返回
 `{"ok":false,"error":"unauthorized"}`）—— 那不是本插件的应答，见「排错」表最后几行。
@@ -304,6 +335,12 @@ Agent 写文件。
 3. 编辑器页签里点「换行：开 / 关」应在自动换行与横向滚动间切换。
 4. 在编辑器里改几个字（先别保存），从文件树点开另一个文件、再点回来：草稿还在。
 5. 让 Agent 改同一个文件，再回来看：出现「磁盘上的文件已被改动」横幅，你的正文没被覆盖。
+6. **删除**：在一个**明文副本**上（先 `cp` 一份）找到预览工具栏的「🗑 删除」——
+   - 点第一下：按钮变「确认删除」并带「删除后无法恢复」提示，旁边多一个「取消」；
+     点「取消」应回到「删除」，什么都不发生；不动它 8 秒应自己变回去。
+   - 点第二下：页签关掉，文件从磁盘和文件树里消失（`ls` 确认）。
+   - 想验版本闸：点第一下「删除」后，在终端里 `touch`/改一下那个文件，再点「确认删除」——
+     应该停在「文件已变更，未删除」并给出「仍然删除」；点它才会真的删掉。
 
 ## 已知边界
 
@@ -314,7 +351,12 @@ Agent 写文件。
   不覆盖」。`create` 模式已经支持，但 UI 上还没有触达它的入口。
 - **点「✎ 编辑」会把预览页签换成编辑器页签**，不能把预览就地换成编辑器正文 —— 后者的开关在
   文档预览自己的 store 里，外部插件没有公开入口。想回预览：从文件树再点该文件。
-- **文件树本身仍然只读**（不改官方 `ui-sidebar-files`），改名 / 删除 / 新建仍走终端或 Agent。
+- **文件树本身仍然只读**（不改官方 `ui-sidebar-files`），改名 / 新建仍走终端或 Agent；
+  **删除**在预览工具栏上有了按钮，但只对「预览得出来」的文件生效（槽位在预览的
+  「不支持此文件」分支里不渲染），编辑器页签里也没有这个按钮。
+- **删除是永久的**：没有回收站、没有软删，删掉就是 `unlink`。二次确认 + 版本闸是唯一的护栏。
+  版本闸与 `unlink` 之间还有一个毫秒级窗口（并发写正好落在里面时会删到刚写下的那一份），
+  代价与理由写在 [IMPLEMENTATION.md](IMPLEMENTATION.md)。
 - **`link:` 安装时 Host 半边改完要重启 Harness**：本目录不在 HMR 的监视集内，
   `plugin_manager` 的禁用 / 启用只会重挂 fiber，不会重新 `import()` 模块。浏览器半边不受这条
   限制（bundle 按内容 revision 取，刷新即新）。

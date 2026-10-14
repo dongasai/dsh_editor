@@ -51,6 +51,9 @@ window.__ModuleLoader__.load({
     /** 写文件路由；与 Host 半边注册的绝对路径逐字一致。 */
     const WRITE_URL = '/workspace-editor/write'
 
+    /** 删除文件路由；与 Host 半边注册的绝对路径逐字一致。 */
+    const DELETE_URL = '/workspace-editor/delete'
+
     /** 能在这个编辑框里安全编辑的文本上限（UTF-16 码元）。 */
     const MAX_EDIT_CHARS = 1024 * 1024
 
@@ -113,6 +116,12 @@ window.__ModuleLoader__.load({
 .dsh-we-button[data-primary="true"]:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}
 .dsh-we-open{display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 8px;border:none;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;flex:none}
 .dsh-we-open:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2)}
+.dsh-we-open[data-danger="true"]{color:var(--dsw-alias-state-error-primary)}
+.dsh-we-open[data-danger="true"]:hover:not(:disabled){color:var(--dsw-alias-state-error-primary)}
+.dsh-we-open:disabled{opacity:.4;cursor:not-allowed}
+.dsh-we-note{display:inline-block;max-width:30ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dsh-we-note[data-tone="warn"]{color:var(--dsw-alias-state-warn-primary)}
+.dsh-we-note[data-tone="error"]{color:var(--dsw-alias-state-error-primary)}
 .dsh-we-banner{flex:none;display:flex;align-items:center;gap:10px;margin:0;padding:6px 10px;font-size:12px;background:var(--dsw-alias-bg-layer-2);border-bottom:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary)}
 .dsh-we-banner[data-tone="warn"]{color:var(--dsw-alias-state-warn-primary)}
 .dsh-we-banner[data-tone="error"]{color:var(--dsw-alias-state-error-primary)}
@@ -138,17 +147,30 @@ window.__ModuleLoader__.load({
       'action.overwrite': '覆盖保存',
       'action.discard': '加载磁盘版本',
       'action.keep': '继续编辑',
+      'action.delete': '删除',
+      'action.deleteConfirm': '确认删除',
+      'action.deleteForce': '仍然删除',
+      'action.cancel': '取消',
       'editor.label': '文件内容编辑框',
       'status.loading': '读取中…',
       'status.clean': '已与磁盘同步',
       'status.dirty': '未保存的修改',
       'status.saved': '已保存',
+      'status.deleting': '删除中…',
+      'status.deleted': '已删除',
+      'status.checking': '检查中…',
       'status.noAddress': '无法解析这个文件的地址，编辑器不可用。',
       'error.read': '读取失败：{message}',
       'error.notUtf8': '这个文件不是 UTF-8 文本，无法在页面里编辑。',
       'error.tooLarge': '文件太大（超过 {limit}），不适合在页面里编辑，请用其它工具打开。',
       'error.transport': '保存请求没有到达 Host（连接中断？），内容仍留在编辑器里。',
       'error.save': '保存失败：{message}',
+      'error.delete': '删除失败：{message}',
+      'error.deleteTransport': '删除请求没有到达 Host（连接中断？），文件没有被删除。',
+      'error.deleteRoute': 'Host 侧还没有这条删除路由（改过 index.js 之后要重启 Harness），文件没有被删除。',
+      'delete.hint': '删除后无法恢复',
+      'delete.stale': '文件已变更，未删除',
+      'delete.noVersion': '读不到文件状态',
       'conflict.stale': '磁盘上的文件在编辑期间变过，尚未覆盖。',
       'conflict.exists': '文件已存在，没有覆盖。',
       'conflict.message': '磁盘上的文件已被改动（可能是模型或其它工具改的），直接保存会覆盖对方的修改。',
@@ -169,17 +191,30 @@ window.__ModuleLoader__.load({
       'action.overwrite': 'Overwrite',
       'action.discard': 'Load disk version',
       'action.keep': 'Keep editing',
+      'action.delete': 'Delete',
+      'action.deleteConfirm': 'Confirm delete',
+      'action.deleteForce': 'Delete anyway',
+      'action.cancel': 'Cancel',
       'editor.label': 'File content editor',
       'status.loading': 'Loading…',
       'status.clean': 'In sync with disk',
       'status.dirty': 'Unsaved changes',
       'status.saved': 'Saved',
+      'status.deleting': 'Deleting…',
+      'status.deleted': 'Deleted',
+      'status.checking': 'Checking…',
       'status.noAddress': 'This file address cannot be parsed, so the editor is unavailable.',
       'error.read': 'Read failed: {message}',
       'error.notUtf8': 'This file is not UTF-8 text and cannot be edited here.',
       'error.tooLarge': 'This file is too large (over {limit}) to edit here; open it with another tool.',
       'error.transport': 'The save request never reached the host (connection lost?). Your text is still in the editor.',
       'error.save': 'Save failed: {message}',
+      'error.delete': 'Delete failed: {message}',
+      'error.deleteTransport': 'The delete request never reached the host (connection lost?). The file was not deleted.',
+      'error.deleteRoute': 'The host has no delete route yet (restart the harness after changing index.js); the file was not deleted.',
+      'delete.hint': 'Deleting cannot be undone',
+      'delete.stale': 'File changed, not deleted',
+      'delete.noVersion': 'File state unavailable',
       'conflict.stale': 'The file changed on disk while you were editing; nothing was overwritten.',
       'conflict.exists': 'The file already exists; nothing was overwritten.',
       'conflict.message': 'The file changed on disk (the agent or another tool may have written it). Saving now would overwrite those changes.',
@@ -718,7 +753,206 @@ window.__ModuleLoader__.load({
         }, '✎', h('span', null, t('action.edit')))
       }
 
-      return { DocumentBody, PaneBody, EditAction }
+      /**
+       * 预览头部的「删除」按钮：真删磁盘上的这个文件，不经过编辑器。
+       *
+       * 三条安全设计（与保存同一套思路）：
+       *
+       * 1. **两次点击**：第一下只进确认态，第二下才发请求；确认态 8 秒后自己过期 —— 免得
+       *    一次误点留下一个随时会删掉文件的按钮。
+       * 2. **版本闸**：进入确认态的同时抓一份当前版本，删除请求带上它。磁盘在你确认期间
+       *    变过（模型或别的工具写了一把）Host 返回 `stale-version`：这里只提示、不删，
+       *    要删必须再点一次「仍然删除」——那才是不带版本闸的无条件删除。
+       * 3. **删完关页签**：文件没了，这张预览也就没有内容可看；页签还是当初那张就关掉它，
+       *    已经换过（`stale`）就留在原地显示「已删除」。
+       *
+       * 删除本身没有「丢弃修改」这一步：这里删的是磁盘上的文件，不是编辑器里的缓冲区。
+       * @param props - `sidebar.right.tab.document.actions` 交来的 props（含 `absolutePath`）。
+       * @returns 删除按钮（含确认 / 冲突 / 失败态），或没有 Host 路径时不渲染。
+       */
+      function DeleteAction(props) {
+        const { absolutePath, sessionId, t } = props
+        const [state, setState] = React.useState({ phase: 'idle' })
+        /** 本次确认的上下文：会话、版本闸基线、按钮所在页签；没有确认态时为 null。 */
+        const pendingRef = React.useRef(null)
+        const statRef = React.useRef(null)
+        const busyRef = React.useRef(false)
+        const aliveRef = React.useRef(true)
+
+        // 请求与读状态都可能比页签活得久：卸载之后一律不再写状态。
+        React.useEffect(() => () => {
+          aliveRef.current = false
+          statRef.current?.abort()
+        }, [])
+
+        // 确认态与冲突态自己过期：误点一下不该留下一个待触发的删除。
+        React.useEffect(() => {
+          if (state.phase !== 'confirm' && state.phase !== 'stale') return undefined
+          const timer = setTimeout(() => {
+            if (!aliveRef.current) return
+            pendingRef.current = null
+            setState({ phase: 'idle' })
+          }, 8000)
+          return () => { clearTimeout(timer) }
+        }, [state.phase])
+
+        if (typeof absolutePath !== 'string' || absolutePath === '') return null
+
+        /**
+         * 第一下点击：进确认态，并顺手抓一份当前版本当版本闸基线。
+         * @param event - 点击事件（用来问出按钮所在的页签与会话）。
+         * @returns 无。
+         */
+        const arm = (event) => {
+          if (busyRef.current) return
+          const target = ctx.sidebarRight.commandTarget(event.currentTarget)
+          const owner = target?.sessionId ?? sessionId
+          const slot = { sessionId: owner, version: undefined, detail: null, target }
+          pendingRef.current = slot
+          statRef.current?.abort()
+          const controller = new AbortController()
+          statRef.current = controller
+          setState({ phase: 'confirm', checked: false, version: undefined, detail: null })
+          if (typeof owner !== 'string' || owner === '') {
+            setState({ phase: 'failed', text: t('delete.noVersion'), detail: null })
+            return
+          }
+          void (async () => {
+            let result
+            try {
+              result = await ctx.remote.workspaceFiles.stat(owner, absolutePath, controller.signal)
+            } catch (error) {
+              result = { ok: false, error: { message: error instanceof Error ? error.message : String(error) } }
+            }
+            if (!aliveRef.current || controller.signal.aborted || pendingRef.current !== slot) return
+            if (result.ok) slot.version = result.value.version
+            else slot.detail = result.error.message
+            setState((prev) => (prev.phase === 'confirm'
+              ? { ...prev, checked: true, version: slot.version, detail: slot.detail }
+              : prev))
+          })()
+        }
+
+        /** 回到初始态：取消、过期、删完关不掉页签时都走这里。 */
+        const reset = () => {
+          statRef.current?.abort()
+          pendingRef.current = null
+          setState({ phase: 'idle' })
+        }
+
+        /**
+         * 发删除请求。
+         * @param force - true 表示不带版本闸（用户点过「仍然删除」）。
+         * @returns 请求结束即返回。
+         */
+        const remove = async (force) => {
+          const slot = pendingRef.current
+          if (slot === null || busyRef.current) return
+          const body = { sessionId: slot.sessionId, path: absolutePath }
+          if (!force && slot.version !== undefined) body.expectedVersion = slot.version
+          busyRef.current = true
+          setState({ phase: 'deleting' })
+          let response
+          try {
+            response = await fetch(DELETE_URL, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(body),
+            })
+          } catch {
+            busyRef.current = false
+            if (!aliveRef.current) return
+            setState({ phase: 'failed', text: t('error.deleteTransport'), detail: null })
+            return
+          }
+          let payload = null
+          try {
+            payload = await response.json()
+          } catch {
+            payload = null
+          }
+          busyRef.current = false
+          if (!aliveRef.current) return
+          if (!response.ok) {
+            const code = typeof payload?.code === 'string' ? payload.code : 'delete-failed'
+            const message = typeof payload?.message === 'string' ? payload.message : `HTTP ${String(response.status)}`
+            // 405 只可能是「这条路由还没注册」：静态 fallback 对非 GET/HEAD 就是这个码，
+            // 而本插件自己的 405 只对非 POST 方法 —— 也就是改了 index.js 还没重启 Harness。
+            if (response.status === 405 && payload === null) {
+              setState({ phase: 'failed', text: t('error.deleteRoute'), detail: null })
+              return
+            }
+            setState(code === 'stale-version'
+              ? { phase: 'stale', text: t('delete.stale'), detail: message }
+              : { phase: 'failed', text: t('error.delete', { message }), detail: message })
+            return
+          }
+          // 文件已经没了：留着的草稿再也不会被恢复，顺手清掉。
+          drafts.delete(`${slot.sessionId}\u0000${absolutePath}`)
+          let closed = 'unavailable'
+          try {
+            if (slot.target !== undefined) closed = ctx.sidebarRight.closeTarget(slot.target)
+          } catch {
+            closed = 'unavailable'
+          }
+          pendingRef.current = null
+          // 页签关掉了就不再写状态（这个组件正在卸载）；关不掉时留在原地显示「已删除」。
+          if (closed !== 'closed') setState({ phase: 'deleted', text: t('status.deleted'), detail: null })
+        }
+
+        /**
+         * 工具栏里的一条短提示：完整文本放 `title`，长消息不撑破工具条；
+         * 属性值带上当前状态，方便浏览器里用选择器断言（`data-workspace-editor-*` 是调试锚点）。
+         */
+        const note = (text, title, tone, extra) => h('span', {
+          className: 'dsh-we-note',
+          title: title ?? text,
+          'data-tone': tone,
+          'data-workspace-editor-delete-note': state.phase,
+          ...extra,
+        }, text)
+
+        const checking = state.phase === 'confirm' && state.checked !== true
+        const gated = state.phase === 'confirm' && state.checked === true && state.version !== undefined
+        const forced = state.phase === 'stale' || (state.phase === 'confirm' && state.checked === true && state.version === undefined)
+        const label = state.phase === 'idle'
+          ? t('action.delete')
+          : state.phase === 'deleting'
+            ? t('status.deleting')
+            : checking
+              ? t('status.checking')
+              : t(gated ? 'action.deleteConfirm' : 'action.deleteForce')
+
+        return h(React.Fragment, null,
+          h('style', null, CSS),
+          state.phase === 'confirm' && note(t('delete.hint'), null, null, {}),
+          state.phase === 'confirm' && state.detail !== null && note(t('delete.noVersion'), state.detail, 'warn', {}),
+          state.phase === 'stale' && note(state.text, state.detail, 'warn', {}),
+          state.phase === 'failed' && note(state.text, state.detail, 'error', { 'data-workspace-editor-delete-error': '' }),
+          state.phase === 'deleted' && note(state.text, null, null, {}),
+          state.phase !== 'failed' && state.phase !== 'deleted' && h('button', {
+            type: 'button',
+            className: 'dsh-we-open',
+            'data-danger': state.phase === 'idle' ? 'false' : 'true',
+            'data-workspace-editor-delete': state.phase,
+            'data-workspace-editor-delete-go': checking ? 'pending' : gated ? 'gated' : 'force',
+            disabled: state.phase === 'deleting' || checking,
+            onClick: state.phase === 'deleting' || checking
+              ? null
+              : state.phase === 'idle'
+                ? arm
+                : () => { void remove(forced) },
+          }, '🗑\uFE0E ', label),
+          // 取消 / 失败 / 已删除都停在原地：失败态也给一个出口，不能只剩一条错误文字。
+          (state.phase === 'confirm' || state.phase === 'stale' || state.phase === 'failed') && h('button', {
+            type: 'button',
+            className: 'dsh-we-open',
+            'data-workspace-editor-delete-cancel': '',
+            onClick: reset,
+          }, t('action.cancel')))
+      }
+
+      return { DocumentBody, PaneBody, EditAction, DeleteAction }
     }
 
     /** 浏览器侧需要的服务：槽位、文案、文档渲染器注册表、右侧栏页签，以及工作区文件的读接口。 */
@@ -739,7 +973,7 @@ window.__ModuleLoader__.load({
      */
     function apply(ctx) {
       const t = ctx.locale.bind(NS)
-      const { DocumentBody, PaneBody, EditAction } = createEditor(ctx)
+      const { DocumentBody, PaneBody, EditAction, DeleteAction } = createEditor(ctx)
       const bands = [
         { id: DEFAULT_RENDERER_ID, extensions: DEFAULT_EXTENSIONS, priority: 'extension' },
         { id: OPTIONAL_RENDERER_ID, extensions: OPTIONAL_EXTENSIONS, priority: 'builtin' },
@@ -782,6 +1016,14 @@ window.__ModuleLoader__.load({
         order: 5,
         locale: NS,
       }, EditAction)), 'workspace-editor: preview edit action')
+
+      // 「删除」紧挨「编辑」：同一个槽位，order 大一号排在它后面。
+      ctx.effect(() => ctx.slots.inject('sidebar.right.tab.document.actions', () => ctx.slots.register({
+        name: 'sidebar.right.tab.document.actions',
+        id: 'workspace-editor-delete',
+        order: 6,
+        locale: NS,
+      }, DeleteAction)), 'workspace-editor: preview delete action')
     }
 
     return { name: 'workspace-editor', inject, apply }

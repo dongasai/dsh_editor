@@ -6,13 +6,14 @@
 
 ## 项目是什么
 
-`@dongasai/dsh-editor` —— DSH 插件，一个包两半：**Host 半边** [index.js](index.js) 注册唯一一条
-写路由 `POST /workspace-editor/write`；**浏览器半边** [client.js](client.js) 在右侧栏文档预览里
-注册可编辑的渲染器、一个编辑器页签类型与预览头部的「✎ 编辑」按钮。
+`@dongasai/dsh-editor` —— DSH 插件，一个包两半：**Host 半边** [index.js](index.js) 注册两条变更
+路由 `POST /workspace-editor/write` 与 `POST /workspace-editor/delete`；**浏览器半边**
+[client.js](client.js) 在右侧栏文档预览里注册可编辑的渲染器、一个编辑器页签类型、预览头部的
+「✎ 编辑」按钮与「🗑 删除」按钮。
 
-三句话概括设计：写走**自注册的 HTTP 路由**（新增 Remote 命名空间需要构建期生成物，`link:`
-安装走不通）；三档入口（默认渲染器 / 可选渲染器 / 编辑器页签）**共用同一份正文**；每次保存都
-**带版本闸**，磁盘中途变过就停下来问人，不静默覆盖。
+三句话概括设计：变更走**自注册的 HTTP 路由**（新增 Remote 命名空间需要构建期生成物，`link:`
+安装走不通）；三档入口（默认渲染器 / 可选渲染器 / 编辑器页签）**共用同一份正文**；每次保存与
+删除都**带版本闸**，磁盘中途变过就停下来问人，不静默覆盖、也不静默删除。
 
 ## 命令
 
@@ -41,26 +42,28 @@
 
 | 文件 | 作用 |
 |---|---|
-| [index.js](index.js) | Host 半边全部实现（335 行）：一条路由 + 三道闸 + 版本闸 |
-| [client.js](client.js) | 浏览器半边全部实现（789 行）：三档入口 + `EditorSurface` |
+| [index.js](index.js) | Host 半边全部实现（470 行）：两条路由共用外壳 + 三道闸 + 版本闸 + `unlink` 的 errno 映射 |
+| [client.js](client.js) | 浏览器半边全部实现（1023 行）：三档入口 + `EditorSurface` + 删除按钮状态机 |
 | [cordis.patch.yml](cordis.patch.yml) | 插进 profile 的那一行 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client`（`platform` / `immediately` / `inject`） |
 | [locale/zh.json](locale/zh.json) / [locale/en.json](locale/en.json) | 插件列表里的标题与描述 |
 | [icon.svg](icon.svg) | 插件卡片图标 |
 | [README.md](README.md) | **怎么用**：安装、编辑器入口、线上协议、排错、怎么验证、已知边界 |
-| [IMPLEMENTATION.md](IMPLEMENTATION.md) | **为什么**：设计决策、一次保存的路径、四条约束 |
+| [IMPLEMENTATION.md](IMPLEMENTATION.md) | **为什么**：设计决策、一次保存 / 删除的路径、四条约束 |
 | [AGENTS.md](AGENTS.md) | 本文件：命令、约束清单、改动连带项 |
 
-`index.js` 内部顺序：常量 → `FS_FAILURES` 码表 → `name` / `inject` → `apply` → `route` →
-`rejected`（信任围栏）→ `requestLifetime`（断连 + 墙钟）→ `parseWriteRequest` → `writeWorkspaceFile`
-（lstat → resolve/contains → sandboxPolicy → writeText）→ `resolveSessionRoot` → `readBody` →
-`sendFailure` → 若干纯工具函数。
+`index.js` 内部顺序：常量（含两条路由的 `*_ENDPOINT` 表）→ `FS_FAILURES` / `REMOVE_FAILURES`
+码表 → `name` / `inject` → `apply`（按表注册两条路由）→ `route`（两条共用的外壳）→
+`rejected`（信任围栏）→ `requestLifetime`（断连 + 墙钟）→ `parseWriteRequest` / `parseDeleteRequest`
+→ `writeWorkspaceFile`（lstat → resolve/contains → sandboxPolicy → writeText）→
+`deleteWorkspaceFile`（lstat → resolve/contains → 自判 sandboxPolicy → stat 版本闸 → `removeFile`）
+→ `removeFile` → `resolveSessionRoot` → `readBody` → `sendFailure` → 若干纯工具函数。
 
-`client.js` 内部顺序：常量（`WRITE_URL` / 两个扩展名表 / 三个 id / `EDITOR_TAB_PATTERN` /
-模块级 `drafts` / `CSS`）→ 文案 `zh` / `en` → 地址工具（`addressParts` /
+`client.js` 内部顺序：常量（`WRITE_URL` / `DELETE_URL` / 两个扩展名表 / 三个 id /
+`EDITOR_TAB_PATTERN` / 模块级 `drafts` / `CSS`）→ 文案 `zh` / `en` → 地址工具（`addressParts` /
 `parseSessionFileAddress` / `absoluteFileAddress` / `fileNameOf` / `paneTarget`）→
-`createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` / `EditAction`）→ `inject` +
-`apply`。
+`createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` / `EditAction` / `DeleteAction`）
+→ `inject` + `apply`（删除按钮与编辑按钮注册在同一个槽位，id 与 order 各一档）。
 
 ## 硬性约束（违反即出 bug，别试探）
 
@@ -70,17 +73,18 @@
 
 1. **只 import `node:` 内建模块**，不新增任何依赖。`FsError` 这类官方类型改为按 `error.code`
    判别（查 `FS_FAILURES` 表），不 import 官方包，也不导出 `Config`（那需要 schemastery）。
-2. **写入必须同时过三道闸**：Connection 信任围栏（`ctx.connection.requestRejection`）→ 会话
-   工作区包含性检查（`ctx.fs.contains`）→ `ctx.fs` 自身的沙箱策略围栏（显式传入
-   `ctx.sandboxPolicy.resolve({ session })`）。**不要为了「方便保存」放宽任何一道**，也不要拿掉
-   `lstat` 的符号链接检查。
-3. **写入带版本闸**：`expectedVersion` → `{ kind: 'replaceIfVersion' }`；`create` →
-   `{ kind: 'createIfAbsent' }`；不传 `expectedVersion` 才是无条件覆盖（只允许发生在用户点过
-   「覆盖保存」之后）。
+2. **变更必须过三道闸**：Connection 信任围栏（`ctx.connection.requestRejection`）→ 会话工作区
+   包含性检查（`ctx.fs.contains`）→ 沙箱策略围栏。写路径的第三道闸由 `ctx.fs.writeText` 执行；
+   **删除没有这层自动保护**（`ctx.fs` 无删除接口，走 `node:fs` 的 `unlink`），必须自己按
+   `policy.mode === 'read-only'` 拒绝。**不要为了「方便保存 / 方便删除」放宽任何一道**，也不要
+   拿掉 `lstat` 的符号链接检查（删除既不递归也不跟软链）。
+3. **变更都带版本闸**：写 `expectedVersion` → `{ kind: 'replaceIfVersion' }`、`create` →
+   `{ kind: 'createIfAbsent' }`；删在 `unlink` 前逐字比对同一个版本令牌。不传 `expectedVersion`
+   才是无条件变更（只允许发生在用户点过「覆盖保存」/「仍然删除」之后）。
 4. **不改观察状态**：不 `emit('fs/observed', …)`。人工在 GUI 里改过的文件对模型来说必须仍是
    「没读过」。
-5. **错误按 `code` 判别，绝不看 `message`**；表里没有的码一律 500 `write-failed` 并记日志，
-   不要新增「猜」的分支。
+5. **错误按 `code` 判别，绝不看 `message`**；表里没有的码一律 500 并记日志（写 `write-failed`、
+   删 `delete-failed`），不要新增「猜」的分支。
 
 ### 浏览器半边
 
@@ -97,6 +101,9 @@
     所以这条不会挡住按钮。
 11. **`doc.version`（草稿基线，版本闸用）与 `doc.diskVersion`（磁盘现状，展示与冲突判定用）
     是两个字段**，不要合并。
+12. **删除按钮要两次点击**：第一下只进确认态、同时抓版本基线（按钮在这期间禁用显示「检查中…」），
+    第二下才发请求；确认态 / 冲突态 8 秒自己过期；**每个状态都要有出路**（失败态也得留「取消」，
+    否则按钮消失、用户连重试都点不到）；删成功用 `closeTarget` 关掉点击时捕获的那张页签。
 
 ## 代码风格
 
@@ -136,14 +143,15 @@ node --check client.js
 
 - 增删扩展名档位（`DEFAULT_EXTENSIONS` / `OPTIONAL_EXTENSIONS` / `priority`）→ 同步 README
   「哪些文件能进编辑器」表与「怎么用」第 2 步。
-- 动线上协议（路由路径、字段、错误码、上限）→ 同步 README 的「线上协议」整节、`FS_FAILURES`
-  表与 [client.js](client.js) 里 `WRITE_URL` 的注释；两边路径必须逐字一致。
+- 动线上协议（路由路径、字段、错误码、上限）→ 同步 README 的「线上协议」整节、`FS_FAILURES` /
+  `REMOVE_FAILURES` 表与 [client.js](client.js) 里 `WRITE_URL` / `DELETE_URL` 的注释；
+  两边路径必须逐字一致。
 - 动保存 / 冲突 / 草稿逻辑 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「数据不丢的三条
-  规矩」。
-- 动 Host 侧的闸 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「一次保存的完整路径」与
-  「四条实现约束」。
+  规矩」；动删除按钮的状态机 → 同步同文件的「规矩 4：删除要两次点击」。
+- 动 Host 侧的闸 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「一次保存的完整路径」
+  （含删除分支）、「删除为什么走 `node:fs`」与「四条实现约束」。
 - 已知边界（1 MiB 编辑上限、没有高亮 / 行号 / 新建入口、页签顶替而非就地切换、文件树仍只读、
-  `link:` 下 Host 半边要重启、草稿只在内存里）写在 README 末尾；**没真正解决之前不要从文档里
-  删掉**。
+  删除永久且带毫秒级窗口、`link:` 下 Host 半边要重启、草稿只在内存里）写在 README 末尾；
+  **没真正解决之前不要从文档里删掉**。
 - **文档分工别混**：README 只回答「怎么用」（用户视角的问题进排错表 / 已知边界），
   IMPLEMENTATION 只回答「为什么」；别让 README 重新长出实现细节。

@@ -3,24 +3,30 @@
 面向改这个插件的人（人和代理）。**怎么用**见 [README.md](README.md)，这里是**为什么这么写**：
 设计决策、两半怎么拼起来、以及每条约束背后踩过的坑。与代码冲突时以代码为准。
 
-源码只有两个文件，一个包两半：[index.js](index.js)（Host 半边，335 行）与
-[client.js](client.js)（浏览器半边，789 行）。
+源码只有两个文件，一个包两半：[index.js](index.js)（Host 半边，470 行）与
+[client.js](client.js)（浏览器半边，1023 行）。
 
 ## 一页总览
 
 ```
 Harness 启动（profile 作用域）
   └─ index.js 的 apply(ctx)
-       └─ ctx.effect(() => ctx.webServer.register({ kind:'exact', path:'/workspace-editor/write' }))
-          └─ 每次保存：POST → route()
+       ├─ ctx.effect(() => ctx.webServer.register({ kind:'exact', path:'/workspace-editor/write' }))
+       └─ ctx.effect(() => ctx.webServer.register({ kind:'exact', path:'/workspace-editor/delete' }))
+          └─ 每次变更：POST → route(ctx, req, res, endpoint)
                ├─ rejected()            Connection 信任围栏（不可信 Host/Origin、未认证）
-               ├─ 媒体类型 / 请求体 / 字段校验
+               ├─ 媒体类型 / 请求体 / 字段校验（endpoint.parse）
                ├─ requestLifetime()     断连 + 30s 墙钟 → AbortSignal
-               └─ writeWorkspaceFile()
-                    ├─ resolveSessionRoot()   会话身份 → 工作区根
-                    ├─ lstat                  最终节点必须是普通文件（符号链接一律拒）
-                    ├─ resolve + contains     路径围栏：必须落在会话工作区内
-                    └─ ctx.fs.writeText()     带沙箱策略与版本闸的原子写
+               ├─ writeWorkspaceFile()
+               │    ├─ resolveSessionRoot()   会话身份 → 工作区根
+               │    ├─ lstat                  最终节点必须是普通文件（符号链接一律拒）
+               │    ├─ resolve + contains     路径围栏：必须落在会话工作区内
+               │    └─ ctx.fs.writeText()     带沙箱策略与版本闸的原子写
+               └─ deleteWorkspaceFile()
+                    ├─ resolveSessionRoot() + lstat + resolve/contains（同上）
+                    ├─ policy.mode === 'read-only' → 403 denied（unlink 绕过 ctx.fs，这层要自己判）
+                    ├─ ctx.fs.stat(target).version 比对 expectedVersion → 409 stale-version
+                    └─ node:fs/promises.unlink(ctx.fs.processPath(target))
 
 浏览器加载（bundle 由 dsh-client-modules 从磁盘现读）
   └─ client.js 的 factory → apply(ctx)
@@ -29,15 +35,16 @@ Harness 启动（profile 作用域）
        ├─ slots.register × 2               sidebar.right.tab.document 的两份正文
        ├─ sidebarRightTabs.register         kind: workspace-editor（pattern 命中不了真实地址）
        ├─ slots.register                   sidebar.right.pane.tab 的编辑器正文
-       └─ slots.register                   sidebar.right.tab.document.actions 的「✎ 编辑」按钮
+       ├─ slots.register                   sidebar.right.tab.document.actions 的「✎ 编辑」按钮（order 5）
+       └─ slots.register                   同一槽位的「🗑 删除」按钮（order 6）
                     ↓ 三个入口共用
               EditorSurface：读盘 → 草稿 → 版本闸保存 → 冲突横幅
                     ↓ 读走 ctx.remote.workspaceFiles.readBytes（官方只读接口）
-                    ↓ 写走 fetch('/workspace-editor/write')（本插件自己的路由）
+                    ↓ 写走 fetch('/workspace-editor/write')、删走 fetch('/workspace-editor/delete')
 ```
 
 两条通道刻意分开：**读**复用官方生成的 Remote 客户端（类型安全、不用自己造
-`InvocationDescriptor`），**写**走一条自己注册的精确路由。下面 D1 解释为什么写不能也走 Remote。
+`InvocationDescriptor`），**写与删**走自己注册的精确路由。下面 D1 解释为什么写不能也走 Remote。
 
 ## 三条不可动摇的设计决策
 
@@ -97,33 +104,67 @@ selected = candidates.find((id) => id === state.rendererId) ?? candidates[0]
 ## Host 半边：一次保存的完整路径
 
 ```
-route(ctx, req, res)
+route(ctx, req, res, endpoint)
   ├─ rejected(ctx, req, res)                 ctx.connection.requestRejection → 403/401，直接结束
   ├─ req.method !== 'POST'                   → 405 + allow: POST
   ├─ mediaTypeOf(req) !== application/json    → 415 unsupported-media-type
   ├─ requestLifetime(req, res)               断连 或 30s 墙钟 → AbortSignal
   ├─ readBody(req)                           8 MiB 上限，超限先 req.resume() 再抛 413
-  ├─ parseWriteRequest(value)                字段校验（sessionId/path/content/mode/expectedVersion）
-  └─ writeWorkspaceFile(ctx, input, signal)
+  ├─ endpoint.parse(value)                   write / delete 各自的字段校验
+  └─ endpoint.run(ctx, input, signal)
        ├─ resolveSessionRoot()               活会话 header.cwd → 存档头 → 404
        ├─ lstat                              存在且不是 file → 409 not-regular-file
        ├─ resolve + contains                 不在工作区内 → 403 outside-workspace
-       ├─ intent = createIfAbsent | replaceIfVersion | undefined
        ├─ policy = sandboxPolicy.resolve({ session })
-       └─ ctx.fs.writeText(target, content, intent, signal, policy)
+       ├─ write：intent = createIfAbsent | replaceIfVersion | undefined
+       │        ctx.fs.writeText(target, content, intent, signal, policy)
+       └─ delete：policy.mode === 'read-only' → 403 denied（自己判，见约束 2）
+                ctx.fs.stat(target).version !== expectedVersion → 409 stale-version
+                node:fs/promises.unlink(ctx.fs.processPath(target))
 ```
+
+两条路由**共用同一个外壳**（围栏 → 方法 → 媒体类型 → 生命周期 → 校验 → 落盘 → 应答），差异
+只在 `ENDPOINT` 表里的三项：路径、校验器、落盘实现，外加 500 时用的失败码（`write-failed` /
+`delete-failed`）。外壳共用是刻意的：三道闸的顺序、断连语义、应答形状只有一份，改一处不会漏
+另一处。
 
 几个刻意的选择：
 
-- **错误按 `code` 判别，绝不看 message**（`FS_FAILURES` 表）。`FsError` 是官方包里的类，而本模块
-  不能 import 官方包（见约束 1），所以只按 `error.code` 这个字符串判别；表里没有的码一律
-  500 `write-failed` 并记日志 —— 宁可把未知故障显式暴露，也不要猜。
+- **错误按 `code` 判别，绝不看 message**（`FS_FAILURES` / `REMOVE_FAILURES` 两张表）。`FsError`
+  是官方包里的类，而本模块不能 import 官方包（见约束 1），所以只按 `error.code` 这个字符串判别；
+  表里没有的码一律 500 并记日志 —— 宁可把未知故障显式暴露，也不要猜。
 - **`lstat` 与 `resolve`+`contains` 两道都要**：前者保证最终节点不是符号链接（`lstat` 不跟随），
-  后者保证解析后的真实路径没跑出工作区。少任何一道，软链就是一个写穿口子。
+  后者保证解析后的真实路径没跑出工作区。少任何一道，软链就是一个写穿 / 删穿口子。
 - **`session === undefined` 时 `sandboxPolicy.resolve()` 不带参数**：冷会话（只有存档头）拿不到
   session 对象，此时用部署默认策略，路径围栏仍然按存档头的 `cwd` 生效。
 - **`requestLifetime` 只在「应答没写完就断开」时才算客户端走了**（`!res.writableEnded`），
   否则正常应答结束触发的 `close` 会把成功写入判成取消。
+
+## 删除为什么走 `node:fs`（以及它的代价）
+
+`ctx.fs` 的变更面**只有** `writeText` / `editText`、`FileSystem` 抽象类里没有任何删除或改名方法；
+官方 `workspaceFiles` Remote 也全是只读。要在 GUI 里删文件，只有两条路：改官方包（本插件是
+`link:` 安装的第三方插件，不该也不会去改），或者在这一层用 `node:fs` 的 `unlink`。
+
+于是有两条必须记住的代价：
+
+1. **沙箱策略那道闸不再自动生效。** 写路径把 `ctx.sandboxPolicy.resolve({ session })` 交给
+   `ctx.fs.writeText`，由组合文件系统（`dsh-fs-sandbox`）在真正落盘前拒绝越界；`unlink` 绕过了
+   整个 `ctx.fs`，这层保护没有了。所以 `deleteWorkspaceFile` 自己解析同一份策略，并且
+   `policy.mode === 'read-only'` 一律 403 `denied` —— 这不是「顺手加的一层」，而是**补回**被绕过
+   的那道闸。改删除路径时，这一条和 `lstat` 的软链检查都不能省。
+2. **版本闸与 `unlink` 之间有一个毫秒级窗口。** 写入是原子的（`writeFileAtomic`），但 POSIX 没有
+   「inode 一致才 unlink」的系统调用：本插件先 `ctx.fs.stat` 比对版本令牌，紧接着 `unlink` 路径。
+   如果另一个进程正好在这个窗口里用「写临时文件 + rename」的方式替换了该文件，被删掉的会是**新**
+   那份。窗口极小（两个相邻的 syscall），而且**用户点删除的意图本来就是「删掉这个路径上的文件」**，
+   所以接受这个残余风险，不去做「先改名再校验」的花活（改名本身会改 ctime，版本令牌就不再可比）。
+   真要更强，只能给 `ctx.fs` 层加删除接口 —— 那是官方包的边界，不在这里。
+3. **errno 自己翻译。** `unlink` 抛的是 Node 的 `Error`（`code: 'ENOENT'` 这类），不是 `FsError`；
+   `REMOVE_FAILURES` 把它们映射到与 `FS_FAILURES` 同一套线上码，映射不到的走 500 `delete-failed`。
+
+浏览器侧对应的是「两次点击 + 版本闸」：第一下点击抓一份当前版本（`workspaceFiles.stat`），第二下
+才带着它发请求；Host 判不过就回 `stale-version`，UI 只提示、改成「仍然删除」让用户再点一次。
+抓版本放在**第一次点击**而不是第二次，就是为了让闸门盖住「你正在犹豫」的这段真实时间窗。
 
 ## 浏览器半边：数据不丢的三条规矩
 
@@ -162,18 +203,36 @@ route(ctx, req, res)
 `doc.version` 与 `doc.diskVersion` 是两个不同的东西：前者是**草稿的基线**（版本闸用），后者是
 **磁盘现状**（展示与冲突判定用）。草稿恢复时两者可以不同，这正是冲突判定的依据。
 
+### 规矩 4：删除要两次点击，抓版本抓在第一次
+
+预览头部的「🗑 删除」是**唯一会毁掉数据**的入口，所以它的状态机比保存更保守：
+
+- 第一下点击只把按钮变成「确认删除」，同时异步 `workspaceFiles.stat` 抓一份当前版本存进
+  `pendingRef`；这段等待期按钮显示「检查中…」并禁用，避免在基线还没到手时就能删。
+- 第二下才发请求，带上那份版本。Host 判不过 → `stale-version`：只提示「文件已变更，未删除」，
+  按钮换成「仍然删除」（此时请求不带 `expectedVersion`，即无条件删除）。
+- 确认态与冲突态 **8 秒自己过期**（`setTimeout` + 依赖 `state.phase` 的 effect）：一次误点不该
+  留下一个随时会删文件的按钮。读写请求都可能在页签卸载后才落地，所以一律先看 `aliveRef`。
+- 删成功就 `ctx.sidebarRight.closeTarget(点击时捕获的 target)`：文件没了，这张预览没有内容可看。
+  页签已经换过（返回 `stale`）时不硬关，留在原地显示「已删除」。失败态也给一个「取消」出口
+  （不给出口的话按钮会消失，用户连重试都点不到 —— 这是探针跑出来的一个真 bug）。
+
+版本抓在**第一次**点击而不是第二次，是为了让闸门盖住「用户在犹豫」的那段真实时间窗：
+如果抓在第二次点击的瞬间，闸门就退化成「stat 与 unlink 之间没人动过」，几乎等于没有。
+
 ## 四条实现约束（改代码前先读）
 
 1. **`index.js` 只 import `node:` 内置模块。** 插件包以 `link:` 装进 profile，模块真实路径在
    插件仓库内，`@deepseek-ai/*` 这类裸包名从这里解析不到（同 `dsh-project-mcp` 的约束 1）。
    `FsError` 等类型改为按 `error.code` 结构化判别，不 import 官方包，也不导出 `Config`
    （那需要 schemastery）。
-2. **写入必须同时过三道闸**：Connection 信任围栏 → 会话工作区包含性检查 → `ctx.fs` 自身的
-   沙箱策略围栏（显式传入 `ctx.sandboxPolicy.resolve({ session })`）。三道闸任一被绕过都是安全
-   回归，不要为了「方便保存」放宽其中任何一道。
-3. **写入带版本闸**：`expectedVersion` → `{ kind: 'replaceIfVersion' }`；磁盘在编辑期间变过就
-   返回 `stale-version`，由用户显式选择覆盖（不带 `expectedVersion` 才是无条件覆盖，
-   `create` 模式走 `createIfAbsent`）。
+2. **变更必须过三道闸**：Connection 信任围栏 → 会话工作区包含性检查 → 沙箱策略围栏。写路径的
+   第三道闸由 `ctx.fs.writeText` 执行；**删除绕过了 `ctx.fs`（`unlink`），必须自己按
+   `policy.mode === 'read-only'` 拒绝**。三道闸任一被绕过都是安全回归，不要为了「方便保存 /
+   方便删除」放宽其中任何一道。
+3. **变更都带版本闸**：写用 `expectedVersion` → `{ kind: 'replaceIfVersion' }`（`create` 走
+   `createIfAbsent`）；删在 `unlink` 前逐字比对同一个版本令牌。磁盘在期间变过就返回
+   `stale-version`，由用户显式选择覆盖 / 仍然删除（不带 `expectedVersion` 才是无条件变更）。
 4. **不改观察状态**：`index.js` 刻意**不** `emit('fs/observed', …)`。FS 观察策略要求 `edit`
    前必须读过文件，人工在 GUI 里改过的文件对模型来说就是「没读过」—— 模型应当重新 `read`
    之后再改，这是正确的语义，别用一条 emit 把它「喂」成已观察。
@@ -188,6 +247,10 @@ route(ctx, req, res)
 `GET` 得 405），**浏览器验交互**，两张清单都在 README 的「怎么验证」里。要补自动化的话，
 第一优先级是**浏览器侧的交互**，不是 Host 的转发。
 
+> 加删除路由时跑过两个**一次性探针**（桩 ctx + 真 `unlink`/真临时目录；迷你 React 运行时驱动
+> 删除按钮的状态机），36 条断言全绿，跑完即删 —— 它们是排查手段，不是常驻测试：
+> 常驻下来就得跟着 Hand-rolled React 与官方桩一起腐烂，与本节的取舍冲突。
+
 ## 明确不做的事
 
 | 不做 | 理由 |
@@ -196,7 +259,9 @@ route(ctx, req, res)
 | 就地切换渲染器（不换页签） | `state.rendererId` 没有公开写入入口（D3） |
 | 给模型加一个「编辑器」工具 | Agent 自己的 `read` / `edit` / `write` 足够，多加一个只会污染工具表 |
 | `emit('fs/observed', …)` 喂观察状态 | 会让模型跳过必要的 `read`，语义是错的（约束 4） |
-| 文件树改名 / 删除 / 新建 | 那是官方 `ui-sidebar-files` 的地盘，改它要连带改它的 store |
+| 文件树改名 / 新建 | 那是官方 `ui-sidebar-files` 的地盘，改它要连带改它的 store；删除只在预览工具栏提供 |
+| 删除进回收站 / 软删 | 工作区里多一个 `.trash` 目录会污染文件树与 Agent 视野；用户要的是「删掉」，不是「先堆着」 |
+| 递归删目录 | 危险面太大，且没有确认 UI 承载它；要删目录走终端 / Agent |
 | 语法高亮 / 行号 / 查找替换 | 官方代码预览已经更好，编辑器不重复造 |
 | 持久化草稿到 localStorage | 目的是「重挂活下来」，不是「跨会话恢复」；持久化要引入清理与配额问题 |
 | 分片上传大文件 | 一次请求一份内容更简单，超限就明确拒绝 |
@@ -206,8 +271,8 @@ route(ctx, req, res)
 | 文件 | 关系 |
 |---|---|
 | [README.md](README.md) | 用法：安装、怎么进编辑器、线上协议、排错、怎么验证、已知边界 |
-| [index.js](index.js) | Host 半边全部实现（路由、三道闸、版本闸） |
-| [client.js](client.js) | 浏览器半边全部实现（三档入口、`EditorSurface`、草稿与冲突） |
+| [index.js](index.js) | Host 半边全部实现（两条路由、三道闸、版本闸、`unlink` 的 errno 映射） |
+| [client.js](client.js) | 浏览器半边全部实现（三档入口、`EditorSurface`、草稿与冲突、删除按钮） |
 | [cordis.patch.yml](cordis.patch.yml) | profile 里的插入行 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client` |
 | [AGENTS.md](AGENTS.md) | 给代理的速查：命令、约束清单、改动连带项 |

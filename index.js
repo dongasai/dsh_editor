@@ -1,8 +1,17 @@
 /**
  * @module @dongasai/dsh-editor
  *
- * **工作区文件编辑器 —— Host 半边**：给 Web GUI 提供唯一一条「写工作区文件」的入口，
- * 浏览器那半边（`./client.js`）在右侧栏的文件预览里渲染一个可编辑、可保存的正文。
+ * **工作区文件编辑器 —— Host 半边**：给 Web GUI 提供「写」与「删」两条工作区文件变更入口，
+ * 浏览器那半边（`./client.js`）在右侧栏的文件预览里渲染可编辑、可保存的正文，并在预览头部
+ * 加一个「删除」按钮。
+ *
+ * ## 两条路由
+ *
+ * - `POST /workspace-editor/write`：带版本闸的整文件写入。
+ * - `POST /workspace-editor/delete`：带版本闸的删除。`ctx.fs` 的变更面只有 `writeText` /
+ *   `editText`，**没有删除接口**，所以这一步落到 `node:fs` 的 `unlink`；代价是 `ctx.fs`
+ *   自身的沙箱策略围栏不再自动生效，必须由本模块按同一份 `ctx.sandboxPolicy.resolve(...)`
+ *   显式补上（见约束 2）。
  *
  * ## 为什么要自己开一条 HTTP 路由
  *
@@ -21,22 +30,29 @@
  *    仓库内，`@deepseek-ai/*` 这类裸包名从这里解析不到（同 `@local/dsh-mcp-json` 的约束 1）；
  *    FsError 等类型改为按 `error.code` 结构化判别，不 import 官方包，也不导出 `Config`
  *    （那需要 schemastery）。
- * 2. **写入必须同时过三道闸**：Connection 信任围栏 → 会话工作区包含性检查
- *    （`ctx.fs.contains(会话根, 目标)`，越界一律 403）→ `ctx.fs` 自身的沙箱策略围栏
- *    （显式传入 `ctx.sandboxPolicy.resolve({ session })`，`read-only` 会话照样拒绝）。
- *    三道闸任一被绕过都是安全回归，不要为了「方便保存」放宽其中任何一道。
- * 3. **写入带版本闸**：客户端把「读到的版本」作为 `expectedVersion` 送上来，Host 用
- *    `{ kind: 'replaceIfVersion' }` 写入；磁盘在编辑期间变过就返回 `stale-version`，
- *    由用户显式选择「覆盖保存」。不传 `expectedVersion` 才是无条件覆盖（用户点过覆盖）。
+ * 2. **变更必须过三道闸**：Connection 信任围栏 → 会话工作区包含性检查
+ *    （`ctx.fs.contains(会话根, 目标)`，越界一律 403）→ 沙箱策略围栏
+ *    （`ctx.sandboxPolicy.resolve({ session })`，`read-only` 会话照样拒绝）。写路径的第三道闸
+ *    由 `ctx.fs.writeText` 自己执行；**删除没有这层自动保护**（`unlink` 绕过了 `ctx.fs`），
+ *    必须自己按 `policy.mode === 'read-only'` 拒绝。三道闸任一被绕过都是安全回归，不要为了
+ *    「方便保存 / 方便删除」放宽其中任何一道。
+ * 3. **变更都带版本闸**：客户端把「自己看到的那份文件的版本」作为 `expectedVersion` 送上来，
+ *    Host 写时用 `{ kind: 'replaceIfVersion' }`、删时在 `unlink` 前逐字比对同一个版本令牌；
+ *    磁盘在期间变过就返回 `stale-version`，由用户显式选择「覆盖保存」/「仍然删除」。
+ *    不传 `expectedVersion` 才是无条件变更（只允许发生在用户点过这两个按钮之后）。
  * 4. **不改观察状态**：这里刻意**不** `emit('fs/observed', …)`。FS 观察策略要求 `edit`
  *    前必须读过文件，人工在 GUI 里改过的文件对模型来说就是「没读过」——模型应当重新
  *    `read` 之后再改，这是正确的语义，别用一条 emit 把它「喂」成已观察。
  */
 
 import { Buffer } from 'node:buffer'
+import { unlink } from 'node:fs/promises'
 
 /** 写文件路由的路径；与客户端半边拼出的 URL 必须逐字一致。 */
 const WRITE_PATH = '/workspace-editor/write'
+
+/** 删除文件路由的路径；与客户端半边拼出的 URL 必须逐字一致。 */
+const DELETE_PATH = '/workspace-editor/delete'
 
 /** 一次保存的请求体上限（字节）。 */
 const MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -44,8 +60,8 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024
 /** 单次写入的文本上限（UTF-16 码元）。 */
 const MAX_CONTENT_CHARS = 4 * 1024 * 1024
 
-/** 单次写入的墙钟上限：文件系统迟迟不返回时不让请求无限挂着。 */
-const WRITE_TIMEOUT_MS = 30 * 1000
+/** 单次变更请求的墙钟上限：文件系统迟迟不返回时不让请求无限挂着（写、删共用）。 */
+const REQUEST_TIMEOUT_MS = 30 * 1000
 
 /** 结构化 `FsErrorCode` → 线上失败码与 HTTP 状态。按 code 判别，绝不看 message。 */
 const FS_FAILURES = {
@@ -62,6 +78,35 @@ const FS_FAILURES = {
   FS_IO_ERROR: { status: 500, code: 'io-error' },
 }
 
+/**
+ * `unlink` 的 errno → 线上失败码与 HTTP 状态。表里没有的一律走 500，不猜（同约束 5）。
+ */
+const REMOVE_FAILURES = {
+  ENOENT: { status: 404, code: 'not-found' },
+  ENOTDIR: { status: 404, code: 'not-found' },
+  EISDIR: { status: 409, code: 'not-regular-file' },
+  EACCES: { status: 403, code: 'denied' },
+  EPERM: { status: 403, code: 'denied' },
+  EROFS: { status: 403, code: 'denied' },
+}
+
+/**
+ * 两条变更路由：各自的路径、校验器、落盘实现，以及 500 时用的线上失败码。
+ * 路由外壳（围栏 / 方法 / 媒体类型 / 生命周期 / 应答）两份共用。
+ */
+const WRITE_ENDPOINT = {
+  path: WRITE_PATH,
+  failure: 'write-failed',
+  parse: parseWriteRequest,
+  run: writeWorkspaceFile,
+}
+const DELETE_ENDPOINT = {
+  path: DELETE_PATH,
+  failure: 'delete-failed',
+  parse: parseDeleteRequest,
+  run: deleteWorkspaceFile,
+}
+
 /** Cordis 插件名（Loader 诊断用）。 */
 export const name = 'workspace-editor'
 
@@ -69,16 +114,18 @@ export const name = 'workspace-editor'
 export const inject = ['webServer', 'connection', 'fs', 'sandboxPolicy', 'sessions']
 
 /**
- * Host 插件正文：注册唯一一条写路由。
+ * Host 插件正文：注册写、删两条路由。
  * @param ctx - Host 上下文；注册是 effect，随插件卸载一起撤销。
  * @returns 无。
  */
 export function apply(ctx) {
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: WRITE_PATH,
-    handler: (req, res) => route(ctx, req, res),
-  }), `workspace-editor: POST ${WRITE_PATH}`)
+  for (const endpoint of [WRITE_ENDPOINT, DELETE_ENDPOINT]) {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact',
+      path: endpoint.path,
+      handler: (req, res) => route(ctx, req, res, endpoint),
+    }), `workspace-editor: POST ${endpoint.path}`)
+  }
 }
 
 /**
@@ -99,13 +146,14 @@ class RequestError extends Error {
 }
 
 /**
- * 一条写路由的完整生命周期：围栏 → 请求校验 → 落盘 → 应答。
+ * 一条变更路由的完整生命周期：围栏 → 请求校验 → 落盘 → 应答。
  * @param ctx - Host 上下文。
  * @param req - 传入请求。
  * @param res - 应答对象。
+ * @param endpoint - 本次请求打到的路由（校验器、落盘实现与 500 失败码）。
  * @returns 应答写完即返回。
  */
-async function route(ctx, req, res) {
+async function route(ctx, req, res, endpoint) {
   if (rejected(ctx, req, res)) return
   if (req.method !== 'POST') {
     sendMethodNotAllowed(res, 'POST')
@@ -119,19 +167,19 @@ async function route(ctx, req, res) {
   const signal = requestLifetime(req, res)
   let input
   try {
-    input = parseWriteRequest(await readBody(req))
+    input = endpoint.parse(await readBody(req))
   } catch (error) {
-    sendFailure(res, error, ctx)
+    sendFailure(res, error, ctx, endpoint.failure)
     return
   }
 
   try {
-    const outcome = await writeWorkspaceFile(ctx, input, signal)
+    const outcome = await endpoint.run(ctx, input, signal)
     if (signal.aborted || res.writableEnded) return
     sendJson(res, 200, outcome)
   } catch (error) {
     if (res.writableEnded) return
-    sendFailure(res, error, ctx)
+    sendFailure(res, error, ctx, endpoint.failure)
   }
 }
 
@@ -151,7 +199,7 @@ function rejected(ctx, req, res) {
 }
 
 /**
- * 本次写入的取消信号：客户端断连，或超出墙钟上限。
+ * 本次变更的取消信号：客户端断连，或超出墙钟上限。
  * @param req - 传入请求（这里只用来读 socket 生命周期）。
  * @param res - 应答对象；只有「应答没写完就断开」才算客户端走了。
  * @returns 组合后的取消信号。
@@ -161,7 +209,7 @@ function requestLifetime(req, res) {
   res.on('close', () => {
     if (!res.writableEnded) disconnect.abort(new Error('client disconnected'))
   })
-  return AbortSignal.any([disconnect.signal, AbortSignal.timeout(WRITE_TIMEOUT_MS)])
+  return AbortSignal.any([disconnect.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
 }
 
 /**
@@ -186,6 +234,22 @@ function parseWriteRequest(value) {
     ? undefined
     : requireString(value.expectedVersion, 'expectedVersion')
   return { sessionId, path, content: value.content, mode, expectedVersion }
+}
+
+/**
+ * 解析并校验删除请求体。删除没有正文，只有「删哪个」与可选的版本闸基线。
+ * @param value - 反序列化后的 JSON 值。
+ * @returns 校验过的删除意图。
+ * @throws {RequestError} 400 —— 任一字段类型不对。
+ */
+function parseDeleteRequest(value) {
+  if (!isPlainObject(value)) throw new RequestError(400, 'bad-request', 'body must be a JSON object')
+  const sessionId = requireString(value.sessionId, 'sessionId')
+  const path = requireString(value.path, 'path')
+  const expectedVersion = value.expectedVersion === undefined || value.expectedVersion === null
+    ? undefined
+    : requireString(value.expectedVersion, 'expectedVersion')
+  return { sessionId, path, expectedVersion }
 }
 
 /**
@@ -224,6 +288,76 @@ async function writeWorkspaceFile(ctx, input, signal) {
     operation: outcome.operation,
     version: outcome.version,
     bytes: Buffer.byteLength(input.content, 'utf8'),
+  }
+}
+
+/**
+ * 真正的删除：会话根 → 目标 → 三道闸 → 版本闸 → `unlink`。
+ *
+ * 与写路径的差别只有两处：第三道闸要自己执行（`unlink` 不经过 `ctx.fs`，它那层沙箱围栏
+ * 不会自动生效），以及 `unlink` 之前要拿同一个版本令牌比对一次。
+ * @param ctx - Host 上下文。
+ * @param input - 校验过的删除意图。
+ * @param signal - 本次调用的取消信号。
+ * @returns 线上成功结果（被删掉的路径）。
+ * @throws {RequestError | Error} 失败时抛出带 code 的错误，交给 `sendFailure` 映射。
+ */
+async function deleteWorkspaceFile(ctx, input, signal) {
+  const { session, workspaceRoot } = await resolveSessionRoot(ctx, input.sessionId, signal)
+
+  // 先看路径本身：目录不递归删、符号链接不跟着删（否则会删穿到工作区外）。
+  const info = await ctx.fs.lstat(input.path, { cwd: workspaceRoot }, signal)
+  if (info === undefined) {
+    throw new RequestError(404, 'not-found', `cannot delete "${input.path}": no such file`)
+  }
+  if (info.type !== 'file') {
+    throw new RequestError(409, 'not-regular-file', `cannot delete "${input.path}": not a regular file (${info.type})`)
+  }
+
+  const target = await ctx.fs.resolve(input.path, { cwd: workspaceRoot, signal })
+  const rootTarget = await ctx.fs.resolve(workspaceRoot, { signal })
+  if (!ctx.fs.contains(rootTarget, target)) {
+    throw new RequestError(403, 'outside-workspace', `cannot delete "${target.displayPath}": outside the session workspace`)
+  }
+
+  // 第三道闸自己补：`unlink` 绕过 ctx.fs，沙箱策略要在这里按同一份解析结果拒绝。
+  const policy = session === undefined ? ctx.sandboxPolicy.resolve() : ctx.sandboxPolicy.resolve({ session })
+  if (policy.mode === 'read-only') {
+    throw new RequestError(403, 'denied', `cannot delete "${target.displayPath}": the session sandbox is read-only`)
+  }
+
+  // 版本闸：与写路径同一个版本令牌；客户端送来「确认删除时看到的那一份」，对不上就停。
+  const current = await ctx.fs.stat(target, signal)
+  if (current === undefined) {
+    throw new RequestError(404, 'not-found', `cannot delete "${target.displayPath}": no such file`)
+  }
+  if (input.expectedVersion !== undefined && current.version !== input.expectedVersion) {
+    throw new RequestError(409, 'stale-version', `cannot delete "${target.displayPath}": the file changed since it was read`)
+  }
+
+  await removeFile(target.displayPath, ctx.fs.processPath(target))
+  return { ok: true, path: target.displayPath, operation: 'delete' }
+}
+
+/**
+ * 直接删掉一个普通文件。
+ *
+ * `ctx.fs` 没有删除接口（变更面只有 `writeText` / `editText`），所以这里退回 `node:fs` 的
+ * `unlink` —— 这是本插件唯一一处不走 `ctx.fs` 的变更，errno 在这里翻译成与 `FS_FAILURES`
+ * 同一套线上码，表里没有的一律 500（不猜）。
+ * @param displayPath - 给人看的路径（错误消息用）。
+ * @param absolutePath - `ctx.fs.processPath(target)` 给出的执行世界绝对路径。
+ * @returns 删除完成即返回。
+ * @throws {RequestError | Error} 已映射的 errno 抛 `RequestError`，其余抛原错误。
+ */
+async function removeFile(displayPath, absolutePath) {
+  try {
+    await unlink(absolutePath)
+  } catch (error) {
+    const errno = typeof error?.code === 'string' ? error.code : undefined
+    const mapped = errno === undefined ? undefined : REMOVE_FAILURES[errno]
+    const message = `cannot delete "${displayPath}": ${messageOf(error)}`
+    throw mapped === undefined ? new Error(message, { cause: error }) : new RequestError(mapped.status, mapped.code, message)
   }
 }
 
@@ -278,9 +412,10 @@ async function readBody(req) {
  * @param res - 应答对象。
  * @param error - 捕获到的值。
  * @param ctx - Host 上下文（打日志用）。
+ * @param fallbackCode - 500 时用的线上失败码（写 `write-failed`、删 `delete-failed`）。
  * @returns 无。
  */
-function sendFailure(res, error, ctx) {
+function sendFailure(res, error, ctx, fallbackCode) {
   if (error instanceof RequestError) {
     sendJson(res, error.status, { code: error.code, message: error.message })
     return
@@ -292,7 +427,7 @@ function sendFailure(res, error, ctx) {
     return
   }
   ctx.logger.error(error)
-  sendJson(res, 500, { code: 'write-failed', message: messageOf(error) })
+  sendJson(res, 500, { code: fallbackCode, message: messageOf(error) })
 }
 
 /** JSON 应答（no-store：读写结果是即时事实）。 */
