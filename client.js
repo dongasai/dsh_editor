@@ -163,7 +163,15 @@ window.__ModuleLoader__.load({
 .dsh-wef-row[data-kind="directory"] .dsh-wef-glyph{color:var(--dsw-alias-label-secondary)}
 .dsh-wef-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-wef-actions{flex:none;display:none;align-items:center;gap:2px}
-.dsh-wef-row:hover .dsh-wef-actions,.dsh-wef-row[data-selected="true"] .dsh-wef-actions{display:inline-flex}
+.dsh-wef-row:hover .dsh-wef-actions,.dsh-wef-row:focus-within .dsh-wef-actions,.dsh-wef-row[data-selected="true"] .dsh-wef-actions{display:inline-flex}
+.dsh-wef-more{width:20px;height:20px;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:0;border:none;border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;opacity:.7}
+.dsh-wef-more:hover{opacity:1;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}
+.dsh-wef-backdrop{position:fixed;inset:0;z-index:40}
+.dsh-wef-menu{position:fixed;z-index:41;min-width:158px;display:flex;flex-direction:column;gap:1px;padding:4px;border-radius:var(--dsw-radius-md,8px);border:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-base));box-shadow:0 8px 24px var(--dsw-alias-shadow-md,rgba(0,0,0,.18))}
+.dsh-wef-menu-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border:none;border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer;white-space:nowrap}
+.dsh-wef-menu-item:hover{background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}
+.dsh-wef-menu-item[data-danger="true"]{color:var(--dsw-alias-state-error-primary)}
+.dsh-wef-menu-sep{height:1px;margin:3px 4px;background:var(--dsw-alias-border-l1)}
 .dsh-wef-note{margin:0;padding:3px 10px;color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dsh-wef-input{width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:2px 6px;border-radius:var(--dsw-radius-sm,6px);border:.5px solid var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);outline:none}
 .dsh-wef-status{flex:none;padding:6px 10px;border-top:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:12px}
@@ -215,6 +223,7 @@ window.__ModuleLoader__.load({
       'files.delete': '删除',
       'files.refresh': '刷新',
       'files.open': '用编辑器打开',
+      'files.more': '更多操作（重命名 / 复制 / 删除）',
       'files.root': '工作区',
       'files.loading': '读取中…',
       'files.empty': '空目录',
@@ -295,6 +304,7 @@ window.__ModuleLoader__.load({
       'files.delete': 'Delete',
       'files.refresh': 'Refresh',
       'files.open': 'Open in the editor',
+      'files.more': 'More actions (rename / copy / delete)',
       'files.root': 'Workspace',
       'files.loading': 'Loading…',
       'files.empty': 'Empty folder',
@@ -464,6 +474,7 @@ window.__ModuleLoader__.load({
       trash: ['M2.8 4.6h10.4', 'M6.3 4.6V2.9h3.4v1.7', 'M4.4 4.6l.7 9.1h5.8l.7-9.1'],
       refresh: ['M13 8a5 5 0 1 1-1.7-3.7', 'M13.3 2.6v3.2h-3.2'],
       open: ['M2.5 12.5V6h6.5l-2.4 2.4', 'M6.6 3.5h6v6'],
+      more: ['M3.6 8h.01', 'M8 8h.01', 'M12.4 8h.01'],
     }
 
     /**
@@ -1212,6 +1223,8 @@ window.__ModuleLoader__.load({
         const [busy, setBusy] = React.useState(null)
         const [error, setError] = React.useState(null)
         const [dropOn, setDropOn] = React.useState(null)
+        /** 右键菜单：`{ path, type, x, y }`；坐标是视口坐标（菜单用 position:fixed）。 */
+        const [menu, setMenu] = React.useState(null)
         const aliveRef = React.useRef(true)
         const levelsRef = React.useRef(levels)
         levelsRef.current = levels
@@ -1375,8 +1388,39 @@ window.__ModuleLoader__.load({
           setSelected(path)
           setError(null)
           setPending(null)
+          setMenu(null)
           if (type === 'directory') toggle(path)
           else openFile(path)
+        }
+
+        /**
+         * 在行上打右键菜单。菜单里的动作与行内图标、工具条按钮完全同一套实现，
+         * 只是入口多一个 —— 悬停图标对不熟悉的人太难发现（用户反馈「tree 缺重命名」）。
+         * @param event - 上下文菜单事件（取视口坐标）。
+         * @param path - 这一行的路径。
+         * @param type - `file` | `directory`。
+         * @returns 无。
+         */
+        const openMenu = (event, path, type) => {
+          event.preventDefault()
+          event.stopPropagation()
+          setSelected(path)
+          setError(null)
+          setMenu({ path, type, ...menuAnchor(event) })
+        }
+
+        /**
+         * 菜单落点：鼠标位置（右键）或按钮左下角（⋯）。都按视口坐标，菜单是 `position:fixed`。
+         * @param event - 触发事件。
+         * @returns `{ x, y }`，并对视口下边缘做一次收敛，免得菜单被切掉。
+         */
+        const menuAnchor = (event) => {
+          const rect = typeof event.currentTarget?.getBoundingClientRect === 'function'
+            ? event.currentTarget.getBoundingClientRect()
+            : null
+          const height = typeof window === 'undefined' ? 0 : window.innerHeight
+          const raw = rect === null ? { x: event.clientX ?? 0, y: event.clientY ?? 0 } : { x: rect.left, y: rect.bottom }
+          return { x: raw.x, y: height > 0 ? Math.min(raw.y, Math.max(0, height - 220)) : raw.y }
         }
 
         /** 打开「新建」输入行：目录要顺手展开，否则输入框没地方待。 */
@@ -1543,6 +1587,34 @@ window.__ModuleLoader__.load({
           await reloadDir(parentOf(target.path))
         }
 
+        /**
+         * 一枚右键菜单项。
+         * @param id - 调试锚点后缀。
+         * @param icon - `ICON_PATHS` 里的图标名。
+         * @param path - 这一项作用的路径。
+         * @param label - 文案；`null` 表示这一项不由这个入口提供（不出现在菜单里）。
+         * @param run - 点下去干什么。
+         * @param hidden - true 时这一项不渲染（类型不适用）。
+         * @param danger - true 时用错误色（删除）。
+         * @returns 菜单项，或 null。
+         */
+        const menuItem = (id, icon, path, label, run, hidden, danger) => {
+          if (hidden) return null
+          return h('button', {
+            key: id,
+            type: 'button',
+            className: 'dsh-wef-menu-item',
+            'data-danger': danger === true ? 'true' : 'false',
+            'data-workspace-editor-files-menu-item': id,
+            'data-workspace-editor-files-menu-path': path,
+            onClick: (event) => {
+              event.stopPropagation()
+              setMenu(null)
+              run()
+            },
+          }, glyph(icon, 14), label)
+        }
+
         const rows = []
         const createHere = editor !== null && editor.mode !== 'rename' ? editor.dir : null
         const inputRow = (depth, draft) => h('div', {
@@ -1588,6 +1660,7 @@ window.__ModuleLoader__.load({
             'data-drop': dropOn === path ? 'true' : 'false',
             style: { paddingLeft: `${String(6 + depth * 14)}px` },
             onClick: () => { activate(path, entry.type) },
+            onContextMenu: (event) => { openMenu(event, path, entry.type) },
             onDragStart: (event) => {
               dragRef.current = path
               try {
@@ -1665,7 +1738,15 @@ window.__ModuleLoader__.load({
               title: t('files.delete'),
               'data-workspace-editor-files-delete': path,
               onClick: (event) => { event.stopPropagation(); void armDelete(path, entry.type) },
-            }, glyph('trash', 14))))
+            }, glyph('trash', 14))),
+          // 常显的「⋯」：悬停图标对不熟悉的人太难发现，每行留一个不用悬停就能点的入口。
+          h('button', {
+            type: 'button',
+            className: 'dsh-wef-more',
+            title: t('files.more'),
+            'data-workspace-editor-files-more': path,
+            onClick: (event) => { openMenu(event, path, entry.type) },
+          }, glyph('more', 14)))
         }
 
         /** 把一个目录的可见内容压平进 `rows`（递归，只走展开着的目录）。 */
@@ -1735,6 +1816,14 @@ window.__ModuleLoader__.load({
           h('button', {
             type: 'button',
             className: 'dsh-wef-tool',
+            title: t('files.rename'),
+            'data-workspace-editor-files-rename-selected': '',
+            disabled: busy !== null || selected === null || selected === root,
+            onClick: () => { startRename(selected) },
+          }, glyph('rename')),
+          h('button', {
+            type: 'button',
+            className: 'dsh-wef-tool',
             title: t('files.refresh'),
             'data-workspace-editor-files-refresh': '',
             disabled: busy !== null,
@@ -1780,7 +1869,22 @@ window.__ModuleLoader__.load({
         }, t('files.cancel'))),
         h('div', {
           className: 'dsh-wef-body',
+          tabIndex: 0,
           'data-drop': dropOn === root ? 'true' : 'false',
+          // F2 = 重命名当前选中行（VS Code 的习惯）；Esc 收起一切浮层。输入框里的按键归输入框自己管。
+          onKeyDown: (event) => {
+            if (event.target?.tagName === 'INPUT') return
+            if (event.key === 'F2' && selected !== null && selected !== root) {
+              event.preventDefault()
+              startRename(selected)
+              return
+            }
+            if (event.key === 'Escape') {
+              setMenu(null)
+              setEditor(null)
+              setPending(null)
+            }
+          },
           onDragOver: (event) => {
             const from = dragRef.current
             if (from === null || parentOf(from) === root) return
@@ -1797,6 +1901,24 @@ window.__ModuleLoader__.load({
             void moveEntry(from, `${root}/${nameOf(from)}`)
           },
         }, rows),
+        menu !== null && h('div', {
+          className: 'dsh-wef-backdrop',
+          'data-workspace-editor-files-menu-backdrop': '',
+          onClick: () => { setMenu(null) },
+          onContextMenu: (event) => { event.preventDefault(); setMenu(null) },
+        }),
+        menu !== null && h('div', {
+          className: 'dsh-wef-menu',
+          style: { left: `${String(menu.x)}px`, top: `${String(menu.y)}px` },
+          'data-workspace-editor-files-menu': menu.path,
+        },
+        menuItem('new-file', 'newFile', menu.path, null, () => { startCreate(menu.path, 'file') }, menu.type === 'file'),
+        menuItem('new-folder', 'newFolder', menu.path, null, () => { startCreate(menu.path, 'folder') }, menu.type === 'file'),
+        menuItem('open', 'open', menu.path, t('files.open'), () => { openFile(menu.path) }, menu.type !== 'file'),
+        h('div', { className: 'dsh-wef-menu-sep', key: 'sep' }),
+        menuItem('rename', 'rename', menu.path, t('files.rename'), () => { startRename(menu.path) }, false),
+        menuItem('copy', 'copy', menu.path, t('files.copy'), () => { void copyEntry(menu.path) }, menu.type !== 'file'),
+        menuItem('delete', 'trash', menu.path, t('files.delete'), () => { void armDelete(menu.path, menu.type) }, false, true)),
         busy !== null && h('p', { className: 'dsh-wef-status', 'data-workspace-editor-files-busy': '' }, t('files.busy')))
       }
 
