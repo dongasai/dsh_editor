@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Edit and save workspace files in the DSH web GUI: an editable document renderer plus one trusted host write route.",
+  "description": "Edit, create, rename, copy and delete workspace files in the DSH web GUI: an editable document renderer, a file-tree sidebar tool, and five trusted host routes.",
   "icon": "./icon.svg",
   "meta": {
     "title": "工作区文件编辑器",
-    "description": "在右侧栏的文件预览里直接编辑并保存工作区文件：官方渲染器只读，这个插件补上「改」的那一步。"
+    "description": "在右侧栏直接编辑并整理工作区文件：预览里改完就存，外加一个自带文件树的「文件编辑」工具。"
   },
   "exports": {
     ".": "./index.js",

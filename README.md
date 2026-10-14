@@ -4,7 +4,8 @@
 图片 / PDF / Office 渲染器全部只读，读文件的 Remote 命名空间
 `@deepseek-ai/dsh-api-workspace-files` 也明确写着 *"The service exposes no mutation operation."*，
 这个插件补上**写**与**删**的那一半 —— 可编辑的正文、保存按钮、未保存状态与冲突处理，预览头部
-的「🗑 删除」按钮（两次点击确认），外加只服务于它们的两条 Host 路由。
+的「🗑 删除」按钮（两次点击确认），外加一个自带文件树的右侧栏工具 **「文件编辑」**：新建、
+改名 / 移动、复制、删除、拖拽整理，都在 GUI 里做完。它们全部打到本插件自己的 Host 路由。
 
 与「用终端 / 让 Agent 改」的差别不是快慢，而是**谁在改**：人在 GUI 里改完点保存，
 版本闸记得住「你读到的是哪一版」，磁盘中途被模型改过就停下来问，不静默覆盖；
@@ -102,10 +103,30 @@ dsh plugin --profile web add link:/data/ai/dsh/dsh_editor
    变成「确认删除」，第二下才真的删 —— 中间那几秒里如果你不点，它会自己变回「删除」。
    删掉的文件**不进回收站**，页签会随之关掉，文件树里那一行也会消失（树自己盯着变更）。
 
-### 3. 确认它真的在工作
+### 3. 用「文件编辑」面板
+
+右侧栏的**加号 / 引导页**里有一张「文件编辑」卡片（快捷键 **Ctrl/Cmd+Alt+E**，可在快捷键设置里改）。
+它开一个**自带文件树**的页签：
+
+| 想做什么 | 怎么做 |
+|---|---|
+| 看目录 | 点目录行展开 / 收起；条目按「目录在前、再按名字」排；目录变了会自己刷新（订阅了官方变更流） |
+| 打开文件 | **单击文件行** → 在同一栏里开本插件的编辑器页签（面板自己不消失） |
+| 新建 | 工具条上的「新建文件 / 新建文件夹」落在**当前选中的目录**（选中文件时是它所在的目录）；也可以点某个目录行上的 + |
+| 改名 / 移动 | 行上的铅笔按钮，输入框里回车。名字里带 `/` 就是搬到子目录（`a/b.md`） |
+| 复制 | 文件行上的复制按钮：同目录生成「xxx 副本」，重名自动往后编号；**目录不支持复制** |
+| 删除 | 行上的垃圾桶按钮 → **确认条**再点一次。空目录一次确认；非空目录确认条会报条目数，按钮是「递归删除」 |
+| 拖拽 | 把行拖到某个目录行上松手即可移动；拖到自己所在目录、或把目录拖进自己的子树都不接受 |
+
+删除同样**带版本闸**：你点「删除」的瞬间它会记下这个条目的版本，等你点确认时如果磁盘上已经变过
+（模型或别的工具动过），Host 会拒绝，确认条上改说「这个条目在确认期间变过，没有删除」并把按钮换成
+「仍然删除」——要删得再点一次。
+
+### 4. 确认它真的在工作
 
 改一个字，底部状态条应当从「已与磁盘同步」变成「未保存的修改」并且「保存」按钮变成品牌色；
 点保存后变「已保存」，用 `cat` / `git diff` 看磁盘，内容确实变了。看不到编辑器时按「排错」表逐条对。
+在「文件编辑」面板里新建一个文件，`ls` 应当立刻看得到它 —— 面板自己的列表也会跟着刷出来。
 
 ## 编辑器长什么样
 
@@ -134,8 +155,8 @@ dsh plugin --profile web add link:/data/ai/dsh/dsh_editor
 
 | 文件 | 作用 |
 |---|---|
-| [index.js](index.js) | **Host 半边**：注册 `POST /workspace-editor/write` 与 `POST /workspace-editor/delete`，做信任围栏、路径围栏、沙箱策略、版本闸，写走原子写、删走 `unlink`。只 import `node:` 内置模块。 |
-| [client.js](client.js) | **浏览器半边**：两档文档渲染器 + 编辑器页签类型 + 预览头部的「编辑」「删除」按钮，共用同一份可编辑正文 `EditorSurface`。 |
+| [index.js](index.js) | **Host 半边**：注册五条变更路由（`write` / `delete` / `mkdir` / `rename` / `copy`），做信任围栏、路径围栏、沙箱策略与版本闸；写走 `ctx.fs` 的原子写，其余四条走 `node:fs`。只 import `node:` 内置模块。 |
+| [client.js](client.js) | **浏览器半边**：两档文档渲染器 + 编辑器页签类型 + 预览头部的「编辑」「删除」按钮 + 「文件编辑」工具面板（自带文件树）。 |
 | [cordis.patch.yml](cordis.patch.yml) | 只插入一行插件；浏览器半边由 `package.json` 的 `dsh.client` 声明，由 dsh-client-modules 扫出来。 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client`。 |
 | [locale/{zh,en}.json](locale/zh.json) | 插件卡片上的显示名与说明。 |
@@ -153,6 +174,9 @@ Host 半边 `inject`：`webServer` / `connection` / `fs` / `sandboxPolicy` / `se
 | `ctx.sidebarRightTabs.register` | kind `workspace-editor`，id `@dongasai/dsh-editor/tab`，pattern 命中不了真实地址 |
 | `sidebar.right.pane.tab` | 该 id 的页签正文（编辑器） |
 | `sidebar.right.tab.document.actions` | id `workspace-editor`、`order: 5` 的「✎ 编辑」按钮；id `workspace-editor-delete`、`order: 6` 的「🗑 删除」按钮 |
+| `ctx.sidebarRightTabs.register` | kind `workspace-editor-files`，id `@dongasai/dsh-editor/files`，guide 卡片「文件编辑」（没有 patterns，只能按 kind 打开） |
+| `sidebar.right.pane.tab` | 该 id 的文件树面板正文（自带新建 / 改名 / 复制 / 删除 / 拖拽） |
+| `ctx.shortcuts.register` | 命令 `workspace.editor.files`（默认 `Ctrl/Cmd+Alt+E`），打开「文件编辑」面板 |
 
 ## 哪些文件能进编辑器
 
@@ -197,32 +221,46 @@ content-type: application/json
 
 {
   "sessionId": "session-3",
-  "path": "src/main.ts",
-  "expectedVersion": "…"             // 点「删除」时看到的版本；省略 = 无条件删除（用户点过「仍然删除」）
+  "path": "src",                     // 文件或目录
+  "expectedVersion": "…",            // 点「删除」时看到的版本；省略 = 无条件删除（用户点过「仍然删除」）
+  "recursive": false                 // 目录：false/省略只删空的（rmdir），true 才连内容一起删
 }
 ```
 
 成功（200）：`{ "ok": true, "path": "/abs/path", "operation": "delete" }`
 
-失败：`{ "code": "…", "message": "…", "fsCode": "…" }`，HTTP 状态按码给出。两条路由共用下表，
-「写 / 删」列标出只在某一条上出现的含义：
+建目录 / 改名 / 复制：
+
+```http
+POST /workspace-editor/mkdir     { "sessionId": "…", "path": "docs" }              // 不递归建父级
+POST /workspace-editor/rename    { "sessionId": "…", "from": "a.md", "to": "b/c.md" }   // 改名或移动
+POST /workspace-editor/copy      { "sessionId": "…", "from": "a.md", "to": "a 副本.md" } // 只复制文件
+```
+
+成功（200）：`mkdir` → `{ "ok": true, "path": "…", "operation": "mkdir" }`；
+`rename` / `copy` → `{ "ok": true, "from": "…", "to": "…", "operation": "rename" | "copy" }`。
+
+失败：`{ "code": "…", "message": "…", "fsCode": "…" }`，HTTP 状态按码给出。五条路由共用下表：
 
 | code | HTTP | 含义 |
 |---|---|---|
-| `bad-request` | 400 | 请求体不是 JSON 对象、字段类型不对（`sessionId` / `path` 必须是非空字符串，`content` 必须是字符串） |
-| `outside-workspace` | 403 | 目标不在该会话的工作区内 |
-| `denied` | 403 | 沙箱策略拒绝（`read-only` 会话；写由 `ctx.fs` 判，删由插件按 `ctx.sandboxPolicy.resolve` 自己判） |
+| `bad-request` | 400 | 请求体不是 JSON 对象、字段类型不对（`sessionId` / `path` / `from` / `to` 必须是非空字符串，`content` 必须是字符串，`recursive` 必须是布尔） |
+| `outside-workspace` | 403 | 目标不在该会话的工作区内（`rename` / `copy` 的两端都要在里面） |
+| `denied` | 403 | 沙箱策略拒绝（`read-only` 会话；写由 `ctx.fs` 判，其余四条由插件按 `ctx.sandboxPolicy.resolve` 自己判） |
 | `unknown-session` | 404 | 这个 Host 既不认识活会话，也没有它的存档头 |
-| `not-found` | 404 | 目标不存在（写：`create` 之外的模式；删：文件已经不在了） |
-| `stale-version` | 409 | 磁盘上的文件变过（写：编辑期间；删：确认期间）或已被删除 —— UI 写提示「覆盖保存」、删提示「仍然删除」 |
+| `not-found` | 404 | 目标不存在，或父目录不存在（写：`create` 之外的模式；删 / 改名 / 复制：条目已经不在） |
+| `stale-version` | 409 | 磁盘上的条目变过（写：编辑期间；删：确认期间）或已被删除 —— UI 写提示「覆盖保存」、删提示「仍然删除」 |
 | `not-observed` | 409 | 写：`create` 模式下文件已存在 |
-| `not-regular-file` | 409 | 写 / 删：目标是目录、符号链接等非普通文件（删除不递归、不跟软链） |
-| `not-directory` | 409 | 路径中间的一段不是目录 |
+| `target-exists` | 409 | 改名 / 复制 / 新建目录：目标已经存在（不覆盖、不改名；复制这一条是 `COPYFILE_EXCL` 的内核级拒绝） |
+| `not-empty` | 409 | 删除：目录不是空的，而这次没有带 `recursive: true` |
+| `invalid-target` | 409 | 改名 / 复制：源与目标是同一个路径，或把目录搬进它自己的子树 |
+| `not-regular-file` | 409 | 目标是符号链接（一律拒绝）或类型不对（复制只收普通文件，改名收文件与目录） |
+| `not-directory` | 409 | 路径中间的一段不是目录（父级不存在是 404 `not-found`） |
 | `too-large` | 413 | 请求体（8 MiB）或内容（4 MiB 字符）超限（仅写） |
 | `unsupported-media-type` | 415 | 不是 `application/json` |
 | `not-text` | 415 | 底层文件系统策略判定不是文本（本插件读盘走 `readBytes`，**不做**文本判定，所以这一条只在底层拒绝时出现；非 UTF-8 / 含 NUL 的文件通常由浏览器侧的 `TextDecoder` 先判掉，见「已知边界」） |
 | `aborted` | 408 | 客户端断开或超过 30s 墙钟上限 |
-| `write-failed` / `delete-failed` / `io-error` | 500 | 其它文件系统故障（原始信息在 `message`；`delete-failed` 是删路由上未映射的 `unlink` 失败） |
+| `write-failed` / `delete-failed` / `mkdir-failed` / `rename-failed` / `copy-failed` / `io-error` | 500 | 其它文件系统故障（原始信息在 `message`；后四个是各自路由上未映射的 `node:fs` errno） |
 
 其它方法一律 `405` 并带 `allow: POST`；所有应答都带 `cache-control: no-store`。
 
@@ -238,11 +276,13 @@ content-type: application/json
    想借软链写穿出去会被 403 挡住。
 3. **沙箱策略围栏**：写入显式带上 `ctx.sandboxPolicy.resolve({ session })`，由组合文件系统
    `ctx.fs` 再判一次（`read-only` 会话一律拒绝，`workspace-write` 只放行工作区内与平台临时区）。
-   **删除没有这层自动保护** —— `ctx.fs` 没有删除接口，删走 `node:fs` 的 `unlink`，所以插件
-   按同一份 `ctx.sandboxPolicy.resolve({ session })` 自己判 `read-only`。
-4. **版本闸**：`expectedVersion` 写时走 `FsWriteIntent.replaceIfVersion`（或 `createIfAbsent`），
-   写入是原子的；删时在 `unlink` 之前逐字比对同一个版本令牌。版本不符就 `FS_STALE_VERSION`，
-   绝不静默覆盖、也绝不静默删除。
+   **另外四条没有这层自动保护** —— `ctx.fs` 没有删除 / 改名 / 建目录 / 复制的接口，它们走
+   `node:fs`，所以插件按同一份 `ctx.sandboxPolicy.resolve({ session })` 自己判 `read-only`
+   （`guardMutation()` 一处收口）。
+4. **破坏性变更有版本闸**：`expectedVersion` 写时走 `FsWriteIntent.replaceIfVersion`
+   （或 `createIfAbsent`），写入是原子的；删时在落盘之前逐字比对同一个版本令牌。版本不符就
+   `FS_STALE_VERSION`，绝不静默覆盖、也绝不静默删除。**改名与复制不带版本闸**：它们防的是另一
+   件事 —— 目标必须不存在（改名预检，复制用 `COPYFILE_EXCL` 让内核来判）。
 
 边界说明：**这不是**内核级隔离。DSH 的文件沙箱本身是「可信代码对不可信路径」的包含性检查
 （官方注释原话：*containment, not a security boundary*），本插件与官方 Agent 的 `write`
@@ -282,6 +322,12 @@ Agent 写文件。
 | 保存报 403 `denied` | 会话是 `read-only` 沙箱 | 换可写会话，或改会话的沙箱策略 |
 | 保存报 404 `unknown-session` | 会话已经被这个 Host 忘掉（换了 Harness 实例、存档已清） | 重开会话再编辑 |
 | 保存报 413 | 内容超过 4 MiB 字符 / 请求体超过 8 MiB | 用别的工具改大文件 |
+| 引导页里没有「文件编辑」卡片 | 页签类型没注册（Host 半边没重启 / bundle 是旧的） | 刷新页面；改了 `index.js` 就重启 Harness |
+| 「文件编辑」面板里列表出不来 | 这个会话还没有工作区根，或工作区读不出来 | 面板会直接说「这个会话还没有工作区根」；否则横幅里有 Host 的原始诊断 |
+| 面板里新建 / 改名 / 复制报「Host 侧还没有这条路由」 | 只刷新了页面，`mkdir` / `rename` / `copy` 还没注册（静态 fallback 对 POST 回 405） | **重启 Harness** |
+| 面板里改名 / 复制报「目标已经存在」 | 目标路径已经有东西 | 换个名字；复制会自动往后编号，但列表可能已经过期 |
+| 面板里删目录报「目录不是空的」 | 你点「删除」之后目录里出现了新条目（版本闸之外的兜底） | 确认条会升级成「递归删除」，再点一次 |
+| 拖拽没反应 | 有些宿主环境（iframe / 触屏）不给 HTML5 拖放事件 | 用行上的铅笔按钮改名 / 移动（同一套 Host 路由） |
 | 从 shell 里 curl 这条路由拿到 `{"ok":false,"error":"unauthorized"}` | **不是插件的错**：本 profile 装了 `@xgone/dsh-remote`，它**猴补 `ctx.webServer.register`**，给之后注册的每条路由套一层自己的会话门禁（`wrapHttp`），先撞上的是它 | 带上它自己的登录 cookie，或按「怎么验证」在页面里点；浏览器本来就带着它的会话，不受影响 |
 | plugin 行是 `enabled: true` 但页面里什么都没变 | 浏览器 bundle 是上一次加载的 | 刷新页面（`link:` 安装时 `client.js` 每次从磁盘现读）；Host 半边改了则要重启 Harness |
 | 改了 `index.js` 不生效 | Host 半边不在 HMR 监视集内，ESM 模块缓存按解析后的 URL 命中 | **重启 Harness**（禁用 / 启用插件不够） |
@@ -308,7 +354,9 @@ Agent 写文件。
 | 编辑器页签注册 + 正文 | 同上，`root: sidebar.right.pane.tab` | occupants 里出现 `@dongasai/dsh-editor/tab`，`active: true` |
 | 「编辑」按钮注册 | 同上，`root: sidebar.right.tab.document.actions` | occupants 里出现 `{ id: workspace-editor, order: 5 }`，`active: true` |
 | 「删除」按钮注册 | 同上，`root: sidebar.right.tab.document.actions` | occupants 里出现 `{ id: workspace-editor-delete, order: 6 }`，`active: true`（排在「编辑」后面） |
-| 页签类型注册 | 「编辑」按钮的注册在 `ctx.sidebarRightTabs.register(...)` **之后**执行且成功 | 类型注册没抛错（同一 `apply` 内，上一条通过即蕴含） |
+| 「文件编辑」正文注册 | `Slots`.`listSubTree`，`root: sidebar.right.pane.tab` | occupants 里出现 `@dongasai/dsh-editor/files`，`active: true` |
+| 页签类型注册 | 「编辑」按钮的注册在 `ctx.sidebarRightTabs.register(...)` **之后**执行且成功 | 类型注册没抛错（同一 `apply` 内，上一条通过即蕴含）；`workspace-editor` 与 `workspace-editor-files` 两个 kind 都在 |
+| 快捷键注册 | 命令面板 / 快捷键设置里找 `workspace.editor.files` | 默认绑定是 `Ctrl/Cmd+Alt+E`，没有冲突标记 |
 
 > Client provider 的查询要等页面回一次响应（Host 转发），所以页面得开着；超时说明没有活页面。
 
@@ -316,8 +364,8 @@ Agent 写文件。
 
 | 检查 | 手段 | 期望 |
 |---|---|---|
-| 信任围栏 | 无认证的 `POST /workspace-editor/write`、`POST /workspace-editor/delete` | 都被拒（403），不会落到 SPA fallback |
-| 路由存在性 | 这两个 URL 用 `GET` | 各自 `405` + `allow: POST`（而不是 SPA 的 HTML） |
+| 信任围栏 | 无认证的 `POST /workspace-editor/write`、`/delete`、`/mkdir`、`/rename`、`/copy` | 都被拒（403），不会落到 SPA fallback |
+| 路由存在性 | 这五个 URL 用 `GET` | 各自 `405` + `allow: POST`（而不是 SPA 的 HTML） |
 
 本机 profile 装了 `@xgone/dsh-remote` 时，从 shell 打这两条会先撞上它的会话门禁（返回
 `{"ok":false,"error":"unauthorized"}`）—— 那不是本插件的应答，见「排错」表最后几行。
@@ -342,21 +390,43 @@ Agent 写文件。
    - 想验版本闸：点第一下「删除」后，在终端里 `touch`/改一下那个文件，再点「确认删除」——
      应该停在「文件已变更，未删除」并给出「仍然删除」；点它才会真的删掉。
 
+7. **「文件编辑」面板**（先 `cp -r` 一份工作区，或在一个新建的临时目录里试）：
+   - 引导页加号里能找到「文件编辑」，`Ctrl/Cmd+Alt+E` 也能开；面板标题是「文件编辑」。
+   - 根目录列出来了，目录在前；点目录行展开，能一层层点下去；空目录显示「空目录」。
+   - 单击文件 → 同一栏开了编辑器页签，**面板没有消失**。
+   - 新建文件 / 新建文件夹：工具条上的按钮落在当前选中的目录；输入名字回车，文件真的出现在磁盘上
+     （`ls` 确认），面板自己也刷出来了。
+   - 改名：铅笔按钮，回车生效；输入 `sub/name.md` 会搬进子目录。
+   - 复制：文件行上的复制按钮生成「xxx 副本」；再点一次是「xxx 副本 2」。
+   - 拖拽：把一个文件行拖到另一个目录行上松手，文件真的移动了；把目录拖进它自己的子树应无反应。
+   - 删除：点垃圾桶 → 确认条 → 再点一次，文件消失；对**非空目录**按钮应显示「递归删除」，
+     对空目录显示「删除」。想验版本闸：点「删除」后先在终端 `touch` 那个文件，再点确认 ——
+     确认条应改说「变过」，按钮变「仍然删除」。
+
 ## 已知边界
 
 - **只处理 UTF-8 文本**：非 UTF-8、含 NUL 或超过 **1 MiB 字符**的文件会显示说明而不给编辑。
   这是浏览器侧的编辑上限；Host 接受的上限更宽（内容 4 MiB 字符 / 请求体 8 MiB），
   两者别混。
-- **没有语法高亮、行号、查找替换、多文件、新建文件入口** —— 目前只解决「能改、能存、不丢、
-  不覆盖」。`create` 模式已经支持，但 UI 上还没有触达它的入口。
+- **编辑器本身没有语法高亮、行号、查找替换、多文件** —— 目前只解决「能改、能存、不丢、
+  不覆盖」。**新建入口在「文件编辑」面板里**（工具条上的「新建文件」）。
 - **点「✎ 编辑」会把预览页签换成编辑器页签**，不能把预览就地换成编辑器正文 —— 后者的开关在
   文档预览自己的 store 里，外部插件没有公开入口。想回预览：从文件树再点该文件。
-- **文件树本身仍然只读**（不改官方 `ui-sidebar-files`），改名 / 新建仍走终端或 Agent；
-  **删除**在预览工具栏上有了按钮，但只对「预览得出来」的文件生效（槽位在预览的
-  「不支持此文件」分支里不渲染），编辑器页签里也没有这个按钮。
-- **删除是永久的**：没有回收站、没有软删，删掉就是 `unlink`。二次确认 + 版本闸是唯一的护栏。
-  版本闸与 `unlink` 之间还有一个毫秒级窗口（并发写正好落在里面时会删到刚写下的那一份），
-  代价与理由写在 [IMPLEMENTATION.md](IMPLEMENTATION.md)。
+- **官方文件树仍然只读**（不改官方 `ui-sidebar-files`）：改名 / 新建 / 删除要在**本插件的**
+  「文件编辑」面板里做，或在预览工具栏上删单个文件（那条只对「预览得出来」的文件生效，
+  编辑器页签里没有）。
+- **删除是永久的**：没有回收站、没有软删，删掉就是 `unlink` / `rmdir` / `rm -r`。二次确认 +
+  版本闸是唯一的护栏。版本闸与落盘之间有一个毫秒级窗口（并发写正好落在里面时会删到刚写下的
+  那一份）；改名的预检与 `rename(2)` 之间同理。代价与理由写在 [IMPLEMENTATION.md](IMPLEMENTATION.md)。
+- **「文件编辑」面板不做的事**：不支持多选 / 批量操作、不复制目录、不递归新建中间目录、不做
+  上传下载、没有搜索与过滤。「移动」只有两种做法：改名输入框里写相对路径、或拖到目录行上。
+- **面板的版本闸只盖到「直接条目」**：删目录时比对的是目录自身的版本令牌（它随直接子项的增删
+  变化），子目录**内部**的改动不会改变它 —— 递归删除的残余风险见 [IMPLEMENTATION.md](IMPLEMENTATION.md)。
+- **面板不会去动已经开着的编辑器页签**：在面板里改名 / 移动 / 删除一个正被编辑器打开的文件时，
+  那张页签还指着旧路径（保存会按版本闸报错或把它重新创建出来）。改名后想接着编辑，从面板里再点
+  一次那个文件。
+- **拖拽依赖 HTML5 拖放事件**：宿主不给这些事件时（部分触屏 / 嵌入环境）拖不动，用铅笔按钮改名
+  一样能移动。
 - **`link:` 安装时 Host 半边改完要重启 Harness**：本目录不在 HMR 的监视集内，
   `plugin_manager` 的禁用 / 启用只会重挂 fiber，不会重新 `import()` 模块。浏览器半边不受这条
   限制（bundle 按内容 revision 取，刷新即新）。
@@ -368,8 +438,8 @@ Agent 写文件。
 
 | 文件 | 关系 |
 |---|---|
-| [IMPLEMENTATION.md](IMPLEMENTATION.md) | 为什么这么实现：设计决策、两半怎么拼、四条约束的来龙去脉 |
+| [IMPLEMENTATION.md](IMPLEMENTATION.md) | 为什么这么实现：设计决策、两半怎么拼、四条约束与「文件编辑」面板的来龙去脉 |
 | [AGENTS.md](AGENTS.md) | 给代理的速查：命令、硬性约束、改动连带项 |
-| [index.js](index.js) | Host 半边全部实现 |
-| [client.js](client.js) | 浏览器半边全部实现 |
+| [index.js](index.js) | Host 半边全部实现（五条路由） |
+| [client.js](client.js) | 浏览器半边全部实现（编辑器 + 「文件编辑」面板） |
 | [cordis.patch.yml](cordis.patch.yml) | profile 里的插入行 |

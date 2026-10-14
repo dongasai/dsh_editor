@@ -51,8 +51,17 @@ window.__ModuleLoader__.load({
     /** 写文件路由；与 Host 半边注册的绝对路径逐字一致。 */
     const WRITE_URL = '/workspace-editor/write'
 
-    /** 删除文件路由；与 Host 半边注册的绝对路径逐字一致。 */
+    /** 删除条目路由；与 Host 半边注册的绝对路径逐字一致。 */
     const DELETE_URL = '/workspace-editor/delete'
+
+    /** 新建目录路由；与 Host 半边注册的绝对路径逐字一致。 */
+    const MKDIR_URL = '/workspace-editor/mkdir'
+
+    /** 重命名 / 移动路由；与 Host 半边注册的绝对路径逐字一致。 */
+    const RENAME_URL = '/workspace-editor/rename'
+
+    /** 复制文件路由；与 Host 半边注册的绝对路径逐字一致。 */
+    const COPY_URL = '/workspace-editor/copy'
 
     /** 能在这个编辑框里安全编辑的文本上限（UTF-16 码元）。 */
     const MAX_EDIT_CHARS = 1024 * 1024
@@ -131,6 +140,33 @@ window.__ModuleLoader__.load({
 .dsh-we-editor[data-wrap="true"]{white-space:pre-wrap;overflow-wrap:anywhere}
 .dsh-we-message{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:12px;padding:16px 20px;text-align:center;color:var(--dsw-alias-label-secondary);line-height:1.6;white-space:normal}
 .dsh-we-message-text{margin:0;overflow-wrap:anywhere}
+.dsh-wef-root{display:flex;flex-direction:column;flex:auto;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:1.5}
+.dsh-wef-bar{flex:none;display:flex;align-items:center;gap:2px;height:38px;padding:0 6px 0 12px;border-bottom:.5px solid var(--dsw-alias-border-l1)}
+.dsh-wef-path{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.dsh-wef-tool{width:26px;height:26px;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:0;border:none;border-radius:var(--dsw-radius-sm,6px);background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.dsh-wef-tool:hover:not(:disabled){color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}
+.dsh-wef-tool:disabled{opacity:.4;cursor:not-allowed}
+.dsh-wef-banner{flex:none;display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;background:var(--dsw-alias-bg-layer-2);border-bottom:.5px solid var(--dsw-alias-border-l1)}
+.dsh-wef-banner[data-tone="error"]{color:var(--dsw-alias-state-error-primary)}
+.dsh-wef-banner[data-tone="warn"]{color:var(--dsw-alias-state-warn-primary)}
+.dsh-wef-banner-text{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.dsh-wef-body{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 4px 12px;scrollbar-gutter:stable}
+.dsh-wef-body[data-drop="true"]{background:var(--dsw-alias-bg-layer-2)}
+.dsh-wef-row{display:flex;align-items:center;gap:4px;width:100%;box-sizing:border-box;padding:4px 6px 4px 2px;border:none;background:transparent;color:inherit;font:inherit;text-align:left;border-radius:var(--dsw-radius-sm,6px);cursor:pointer}
+.dsh-wef-row:hover{background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}
+.dsh-wef-row[data-selected="true"]{background:var(--dsw-alias-interactive-bg-selected,var(--dsw-alias-bg-layer-2))}
+.dsh-wef-row[data-drop="true"]{outline:1px dashed var(--dsw-alias-brand-primary);outline-offset:-1px}
+.dsh-wef-row[data-busy="true"]{opacity:.5}
+.dsh-wef-caret{width:16px;height:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}
+.dsh-wef-spacer{width:16px;flex:none}
+.dsh-wef-glyph{flex:none;display:inline-flex;color:var(--dsw-alias-label-tertiary)}
+.dsh-wef-row[data-kind="directory"] .dsh-wef-glyph{color:var(--dsw-alias-label-secondary)}
+.dsh-wef-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-wef-actions{flex:none;display:none;align-items:center;gap:2px}
+.dsh-wef-row:hover .dsh-wef-actions,.dsh-wef-row[data-selected="true"] .dsh-wef-actions{display:inline-flex}
+.dsh-wef-note{margin:0;padding:3px 10px;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.dsh-wef-input{width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:2px 6px;border-radius:var(--dsw-radius-sm,6px);border:.5px solid var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);outline:none}
+.dsh-wef-status{flex:none;padding:6px 10px;border-top:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:12px}
 `
 
     /** 界面文案。 */
@@ -169,6 +205,42 @@ window.__ModuleLoader__.load({
       'error.deleteTransport': '删除请求没有到达 Host（连接中断？），文件没有被删除。',
       'error.deleteRoute': 'Host 侧还没有这条删除路由（改过 index.js 之后要重启 Harness），文件没有被删除。',
       'delete.hint': '删除后无法恢复',
+      'files.title': '文件编辑',
+      'files.guide': '自带文件树：新建、改名、复制、删除、拖拽移动',
+      'files.shortcut': '打开「文件编辑」面板',
+      'files.newFile': '新建文件',
+      'files.newFolder': '新建文件夹',
+      'files.rename': '重命名 / 移动',
+      'files.copy': '复制',
+      'files.delete': '删除',
+      'files.refresh': '刷新',
+      'files.open': '用编辑器打开',
+      'files.root': '工作区',
+      'files.loading': '读取中…',
+      'files.empty': '空目录',
+      'files.truncated': '条目太多，只列出了前面这些。',
+      'files.noRoot': '这个会话还没有工作区根，文件编辑不可用。',
+      'files.readFailed': '读取失败：{message}',
+      'files.namePlaceholder': '输入名称后回车（改名可以用 a/b 移到子目录）',
+      'files.confirmDeleteFile': '删除 {name}？删除后无法恢复',
+      'files.confirmDeleteDir': '删除目录 {name}（含 {count} 项，内容会一起删掉）？',
+      'files.confirmDeleteEmptyDir': '删除空目录 {name}？',
+      'files.recursive': '递归删除',
+      'files.stale': '这个条目在确认期间变过，没有删除。',
+      'files.force': '仍然删除',
+      'files.cancel': '取消',
+      'files.busy': '处理中…',
+      'files.error.exists': '目标已经存在，没有覆盖也没有改名。',
+      'files.error.notEmpty': '目录不是空的，要连内容一起删请点「递归删除」。',
+      'files.error.outside': '这个路径不在当前会话的工作区内。',
+      'files.error.denied': '当前会话是只读沙箱，不能改文件。',
+      'files.error.notFound': '路径已经不在了（可能被模型或别的工具动过）。',
+      'files.error.invalid': '这个目标不合法（例如把目录移进它自己里面）。',
+      'files.error.name': '名称不能为空，也不能包含 . 或 .. 这样的路径段。',
+      'files.error.absolute': '只接受相对当前目录的名字或相对路径。',
+      'files.error.route': 'Host 侧还没有这条路由（改过 index.js 之后要重启 Harness）。',
+      'files.error.transport': '请求没有到达 Host（连接中断？），什么都没改。',
+      'files.error.generic': '操作失败（{code}）：{message}',
       'delete.stale': '文件已变更，未删除',
       'delete.noVersion': '读不到文件状态',
       'conflict.stale': '磁盘上的文件在编辑期间变过，尚未覆盖。',
@@ -213,6 +285,42 @@ window.__ModuleLoader__.load({
       'error.deleteTransport': 'The delete request never reached the host (connection lost?). The file was not deleted.',
       'error.deleteRoute': 'The host has no delete route yet (restart the harness after changing index.js); the file was not deleted.',
       'delete.hint': 'Deleting cannot be undone',
+      'files.title': 'File editor',
+      'files.guide': 'Its own file tree: create, rename, copy, delete, drag to move',
+      'files.shortcut': 'Open the file editor panel',
+      'files.newFile': 'New file',
+      'files.newFolder': 'New folder',
+      'files.rename': 'Rename / move',
+      'files.copy': 'Copy',
+      'files.delete': 'Delete',
+      'files.refresh': 'Refresh',
+      'files.open': 'Open in the editor',
+      'files.root': 'Workspace',
+      'files.loading': 'Loading…',
+      'files.empty': 'Empty folder',
+      'files.truncated': 'Too many entries; only the first ones are listed.',
+      'files.noRoot': 'This session has no workspace root yet, so the file editor is unavailable.',
+      'files.readFailed': 'Read failed: {message}',
+      'files.namePlaceholder': 'Type a name and press Enter (a/b moves into a subfolder)',
+      'files.confirmDeleteFile': 'Delete {name}? This cannot be undone',
+      'files.confirmDeleteDir': 'Delete folder {name} (holds {count} entries, all of them go)?',
+      'files.confirmDeleteEmptyDir': 'Delete empty folder {name}?',
+      'files.recursive': 'Delete recursively',
+      'files.stale': 'This entry changed while you were confirming; nothing was deleted.',
+      'files.force': 'Delete anyway',
+      'files.cancel': 'Cancel',
+      'files.busy': 'Working…',
+      'files.error.exists': 'The target already exists; nothing was overwritten or renamed.',
+      'files.error.notEmpty': 'The folder is not empty; use "Delete recursively" to remove its contents too.',
+      'files.error.outside': 'That path is outside this session\'s workspace.',
+      'files.error.denied': 'This session is a read-only sandbox; files cannot be changed.',
+      'files.error.notFound': 'The path is gone (the agent or another tool may have moved it).',
+      'files.error.invalid': 'That target is not allowed (moving a folder into itself, for example).',
+      'files.error.name': 'The name cannot be empty or contain . / .. path segments.',
+      'files.error.absolute': 'Only a name or a relative path inside the current folder is accepted.',
+      'files.error.route': 'The host has no such route yet (restart the harness after changing index.js).',
+      'files.error.transport': 'The request never reached the host (connection lost?). Nothing changed.',
+      'files.error.generic': 'Operation failed ({code}): {message}',
       'delete.stale': 'File changed, not deleted',
       'delete.noVersion': 'File state unavailable',
       'conflict.stale': 'The file changed on disk while you were editing; nothing was overwritten.',
@@ -338,6 +446,47 @@ window.__ModuleLoader__.load({
       const kept = segments.filter((segment) => segment !== '')
       if (kept.length === 0) return null
       return { sessionId: fallbackSessionId, path: `/${kept.join('/')}` }
+    }
+
+    /**
+     * 内联 SVG 图标：这个 bundle 没有构建步骤、也不能 require 官方图标包（它不在 boot 图里），
+     * 所以图标是几段写死的 path。颜色只吃 `currentColor`，跟着主题令牌走。
+     */
+    const ICON_PATHS = {
+      chevronOpen: ['M4.6 6.4 8 9.8l3.4-3.4'],
+      chevronClosed: ['M6.4 4.6 9.8 8l-3.4 3.4'],
+      folder: ['M1.8 4.2h4.1l1.4 1.9h6.9v7.7H1.8z'],
+      file: ['M3.8 1.8h5.1l3.3 3.3v9.1H3.8z', 'M8.7 1.9v3.4h3.4'],
+      newFile: ['M3.8 1.8h5.1l3.3 3.3v9.1H3.8z', 'M8.7 1.9v3.4h3.4', 'M8 9.6v3', 'M6.5 11.1h3'],
+      newFolder: ['M1.8 4.2h4.1l1.4 1.9h6.9v7.7H1.8z', 'M8 8.6v3', 'M6.5 10.1h3'],
+      rename: ['M2.2 13.8l.9-3 7.4-7.4 2.1 2.1-7.4 7.4z'],
+      copy: ['M5.6 1.8h6.6v9.4H5.6z', 'M3.8 4.8v9.4h6.6'],
+      trash: ['M2.8 4.6h10.4', 'M6.3 4.6V2.9h3.4v1.7', 'M4.4 4.6l.7 9.1h5.8l.7-9.1'],
+      refresh: ['M13 8a5 5 0 1 1-1.7-3.7', 'M13.3 2.6v3.2h-3.2'],
+      open: ['M2.5 12.5V6h6.5l-2.4 2.4', 'M6.6 3.5h6v6'],
+    }
+
+    /**
+     * 一枚内联图标。
+     * @param name - `ICON_PATHS` 里的名字。
+     * @param size - 边长（px），默认 16。
+     * @returns SVG 元素。
+     */
+    function glyph(name, size) {
+      const paths = ICON_PATHS[name] ?? ICON_PATHS.file
+      const edge = size ?? 16
+      return h('svg', {
+        width: edge,
+        height: edge,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: '1.2',
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+        focusable: 'false',
+      }, paths.map((d) => h('path', { key: d, d })))
     }
 
     /**
@@ -955,6 +1104,705 @@ window.__ModuleLoader__.load({
       return { DocumentBody, PaneBody, EditAction, DeleteAction }
     }
 
+    /** 「文件编辑」面板：页签类型 id / kind，以及树上每个目录的观察节流。 */
+    const FILES_TAB_ID = '@dongasai/dsh-editor/files'
+    const FILES_KIND = 'workspace-editor-files'
+
+    /** 变更帧到达后合并成一次重列的等待时间（毫秒）。 */
+    const WATCH_DEBOUNCE_MS = 120
+
+    /**
+     * 造出「文件编辑」面板（页签类型 + 自带文件树）。
+     *
+     * 与「工作区文件」面板的关系：两者都是右侧栏的**页签类型**（`sidebarRightTabs.register`
+     * + `sidebar.right.pane.tab`），都按目录懒加载、都订阅官方的 `workspaceFiles.changes`。
+     * 差别在于这个面板自带写操作 —— 新建、改名 / 移动、复制、删除都打到本插件自己的 Host 路由
+     * （官方 `workspaceFiles` 是只读的），并且**单击文件直接开本插件的编辑器页签**。
+     * @param ctx - 客户端根上下文。
+     * @returns 面板正文与 guide 卡片上的图标。
+     */
+    function createFilesPanel(ctx) {
+      /** 绝对路径的父目录；已经是根时返回它自己。 */
+      function parentOf(path) {
+        const cut = path.lastIndexOf('/')
+        return cut <= 0 ? path : path.slice(0, cut)
+      }
+
+      /** 绝对路径的最后一段。 */
+      function nameOf(path) {
+        const cut = path.lastIndexOf('/')
+        return cut === -1 ? path : path.slice(cut + 1)
+      }
+
+      /** `a` 是否就是 `b`，或在 `b` 的子树里（拖拽时用来挡住「搬进自己」）。 */
+      function isInside(inner, outer) {
+        return inner === outer || inner.startsWith(`${outer}/`)
+      }
+
+      /** 复制出来的默认名字：`x.txt` → `x 副本.txt`。 */
+      function copyNameOf(name) {
+        const dot = name.lastIndexOf('.')
+        if (dot <= 0) return `${name} 副本`
+        return `${name.slice(0, dot)} 副本${name.slice(dot)}`
+      }
+
+      /** 目录在前、同类型按名字排；后端给的是稳定名序，这里只调整展示顺序。 */
+      function sortEntries(entries) {
+        return [...entries].sort((left, right) => {
+          const rank = (entry) => (entry.type === 'directory' ? 0 : 1)
+          return rank(left) - rank(right) || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+        })
+      }
+
+      /**
+       * 一次操作的失败说明：能对号入座的就给本地化的人话，其余回落到 Host 的原始诊断。
+       * @param outcome - `{ ok: false, code, message }`。
+       * @param t - 命名空间文案函数。
+       * @returns 显示文本。
+       */
+      function describeMutationFailure(outcome, t) {
+        const known = {
+          'target-exists': 'files.error.exists',
+          'not-empty': 'files.error.notEmpty',
+          'outside-workspace': 'files.error.outside',
+          denied: 'files.error.denied',
+          'not-found': 'files.error.notFound',
+          'invalid-target': 'files.error.invalid',
+        }
+        const key = known[outcome.code]
+        if (key !== undefined) return t(key)
+        // 405 只可能是「这条路由还没注册」：静态 fallback 对非 GET/HEAD 就是这个码。
+        if (outcome.status === 405) return t('files.error.route')
+        return t('files.error.generic', { code: outcome.code, message: outcome.message })
+      }
+
+      /**
+       * 面板正文：会话工作区根 → 一层层列目录 → 行上做变更 → 单击文件开编辑器页签。
+       * @param props - `sidebar.right.pane.tab` 交来的 props（`sessionId` / `useSessions` /
+       *   `useTabInfo` / `t`）。
+       * @returns 树面板，或没有工作区根时的说明。
+       */
+      function FilesPanel(props) {
+        const { sessionId, useSessions, t } = props
+        const cwd = useSessions((state) => state.byId?.[sessionId]?.cwd)
+        const root = typeof cwd === 'string' && cwd !== '' ? cwd.replace(/[/\\]+$/, '') : null
+        if (root === null) {
+          return h('div', { className: 'dsh-wef-root', 'data-workspace-editor-files': 'no-root' },
+            h('style', null, CSS),
+            h('p', { className: 'dsh-wef-note' }, t('files.noRoot')))
+        }
+        // key：换会话 / 换工作区根就整棵树重挂，免得把上个工作区的列表与草稿留在屏幕上。
+        return h(FilesTree, { ...props, root, key: `${sessionId}\u0000${root}` })
+      }
+
+      /**
+       * 树本体。所有状态都活在这个组件里；`FilesPanel` 用 key 保证换会话即重挂。
+       * @param props - `FilesPanel` 的 props 加上解析好的 `root`。
+       * @returns 工具条、横幅、树与确认条。
+       */
+      function FilesTree(props) {
+        const { sessionId, root, useTabInfo, t } = props
+        const { tab } = useTabInfo()
+        const paneId = tab?.panel?.id
+        const [levels, setLevels] = React.useState({})
+        const [expanded, setExpanded] = React.useState(() => new Set([root]))
+        const [selected, setSelected] = React.useState(root)
+        const [editor, setEditor] = React.useState(null)
+        const [pending, setPending] = React.useState(null)
+        const [busy, setBusy] = React.useState(null)
+        const [error, setError] = React.useState(null)
+        const [dropOn, setDropOn] = React.useState(null)
+        const aliveRef = React.useRef(true)
+        const levelsRef = React.useRef(levels)
+        levelsRef.current = levels
+        const pendingRef = React.useRef(pending)
+        pendingRef.current = pending
+        const controllerRef = React.useRef(null)
+        if (controllerRef.current === null) controllerRef.current = new AbortController()
+        /** 每个目录的最新一次读盘代次：晚到的旧结果不许覆盖新结果。 */
+        const generations = React.useRef(new Map())
+        /** 每个目录的观察流停止函数。 */
+        const watchers = React.useRef(new Map())
+        const reloadTimers = React.useRef(new Map())
+        const dragRef = React.useRef(null)
+        const reloadRef = React.useRef(null)
+
+        // 卸载：停掉观察流、清掉节流计时器、中止在飞的读盘。
+        React.useEffect(() => () => {
+          aliveRef.current = false
+          controllerRef.current?.abort()
+          for (const timer of reloadTimers.current.values()) clearTimeout(timer)
+          for (const stop of watchers.current.values()) void stop()
+          watchers.current.clear()
+        }, [])
+
+        /**
+         * 读一个目录（懒加载 + 刷新都走它）。
+         * @param path - 目录的绝对路径。
+         * @returns 读盘结束即返回。
+         */
+        const reloadDir = async (path) => {
+          const generation = (generations.current.get(path) ?? 0) + 1
+          generations.current.set(path, generation)
+          setLevels((prev) => ({ ...prev, [path]: { ...prev[path], phase: prev[path]?.entries === undefined ? 'loading' : 'ready' } }))
+          let result
+          try {
+            result = await ctx.remote.workspaceFiles.list(sessionId, path, controllerRef.current.signal)
+          } catch (failure) {
+            result = { ok: false, error: { message: failure instanceof Error ? failure.message : String(failure) } }
+          }
+          if (!aliveRef.current || controllerRef.current.signal.aborted) return
+          if (generations.current.get(path) !== generation) return
+          if (!result.ok) {
+            setLevels((prev) => ({ ...prev, [path]: { phase: 'failed', message: result.error.message } }))
+            return
+          }
+          setLevels((prev) => ({ ...prev, [path]: { phase: 'ready', entries: sortEntries(result.value.entries), truncated: result.value.truncated } }))
+        }
+        reloadRef.current = reloadDir
+
+        /** 变更帧合并成一次重列：一次保存会连着来好几帧。 */
+        const scheduleReload = (path) => {
+          const timers = reloadTimers.current
+          if (timers.has(path)) clearTimeout(timers.get(path))
+          timers.set(path, setTimeout(() => {
+            timers.delete(path)
+            if (aliveRef.current) void reloadRef.current(path)
+          }, WATCH_DEBOUNCE_MS))
+        }
+
+        /**
+         * 订阅一个目录的变更。用受管的 `$stream`：断线由 Remote 自己重连，这里只负责重列。
+         * @param path - 目录的绝对路径。
+         * @returns 无。
+         */
+        const watchDir = (path) => {
+          if (watchers.current.has(path)) return
+          const stream = ctx.remote.$stream({
+            name: `workspace-editor-files ${path}`,
+            open: (signal) => ctx.remote.workspaceFiles.changes(sessionId, path, signal),
+            ended: () => new Error(`workspace-editor-files: watch ended (${path})`),
+          })
+          const task = (async () => {
+            try {
+              for await (const item of stream) {
+                if (item.value.kind === 'ready') {
+                  item.accept()
+                  continue
+                }
+                scheduleReload(path)
+              }
+            } catch {
+              // 受管流会自己重连；彻底结束时这份列表就停在最后一次读到的样子。
+            }
+          })()
+          watchers.current.set(path, () => { void stream.dispose().then(() => task) })
+        }
+
+        /** 首次读某个目录、或上次读失败时重试，都顺手把它盯上。 */
+        const ensureDir = (path) => {
+          const level = levelsRef.current[path]
+          if (level === undefined || level.phase === 'failed') void reloadDir(path)
+          watchDir(path)
+        }
+
+        // 挂载就把工作区根列出来，并盯上它（root 由外层的 key 固定，换会话会整棵树重挂）。
+        React.useEffect(() => { ensureDir(root) }, [root])
+
+        /**
+         * 发一条变更请求。
+         * @param url - 路由路径。
+         * @param body - 请求体（`sessionId` 由这里统一补上）。
+         * @param path - 这次操作牵动的路径（用来亮「处理中」）。
+         * @returns `{ ok }` 或失败时的 `{ ok: false, code, message, status }`；连接层失败返回 null。
+         */
+        const postJson = async (url, body, path) => {
+          setBusy(path ?? null)
+          let response
+          try {
+            response = await fetch(url, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ sessionId, ...body }),
+            })
+          } catch {
+            if (aliveRef.current) {
+              setBusy(null)
+              setError(t('files.error.transport'))
+            }
+            return null
+          }
+          let payload = null
+          try {
+            payload = await response.json()
+          } catch {
+            payload = null
+          }
+          if (!aliveRef.current) return null
+          setBusy(null)
+          if (response.ok) return { ok: true, payload }
+          return {
+            ok: false,
+            status: response.status,
+            code: typeof payload?.code === 'string' ? payload.code : 'request-failed',
+            message: typeof payload?.message === 'string' ? payload.message : `HTTP ${String(response.status)}`,
+          }
+        }
+
+        /** 展开 / 收起一个目录（首次展开顺手加载 + 订阅）。 */
+        const toggle = (path) => {
+          ensureDir(path)
+          setExpanded((prev) => {
+            const next = new Set(prev)
+            if (next.has(path)) next.delete(path)
+            else next.add(path)
+            return next
+          })
+        }
+
+        /** 在编辑器页签里打开一个文件（不顶掉本面板所在的页签）。 */
+        const openFile = (path) => {
+          const placement = paneId === undefined ? {} : { paneId }
+          ctx.sidebarRight.openResource(absoluteFileAddress(path), {
+            kind: EDITOR_KIND,
+            ...placement,
+            params: { sessionId, path },
+          })
+        }
+
+        /** 点一行：目录展开 / 收起，文件直接进编辑器。 */
+        const activate = (path, type) => {
+          setSelected(path)
+          setError(null)
+          setPending(null)
+          if (type === 'directory') toggle(path)
+          else openFile(path)
+        }
+
+        /** 打开「新建」输入行：目录要顺手展开，否则输入框没地方待。 */
+        const startCreate = (dir, mode) => {
+          setPending(null)
+          setPending(null)
+          setError(null)
+          setSelected(dir)
+          ensureDir(dir)
+          setExpanded((prev) => new Set(prev).add(dir))
+          setEditor({ mode, dir })
+        }
+
+        /** 打开「重命名」输入行：预填当前名字，允许带 `/` 直接搬到子目录。 */
+        const startRename = (path) => {
+          setPending(null)
+          setPending(null)
+          setError(null)
+          setEditor({ mode: 'rename', dir: parentOf(path), path })
+        }
+
+        /**
+         * 提交输入行（回车或失焦）。
+         * @param draft - 当前输入行。
+         * @param raw - 输入框里的文本。
+         * @returns 请求结束即返回。
+         */
+        const submitEditor = async (draft, raw) => {
+          // 回车提交后输入框会卸载，部分浏览器仍补一次 blur；同一个 draft 只提交一次。
+          if (draft.done === true) return
+          draft.done = true
+          const value = String(raw ?? '').trim()
+          setEditor(null)
+          if (value === '') return
+          if (value.startsWith('/')) {
+            setError(t('files.error.absolute'))
+            return
+          }
+          const segments = value.split('/')
+          if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+            setError(t('files.error.name'))
+            return
+          }
+          const target = `${draft.dir}/${value}`
+          if (draft.mode === 'rename') {
+            if (target === draft.path) return
+            const outcome = await postJson(RENAME_URL, { from: draft.path, to: target }, draft.path)
+            if (outcome === null) return
+            if (!outcome.ok) {
+              setError(describeMutationFailure(outcome, t))
+              return
+            }
+            setSelected(target)
+            await reloadDir(draft.dir)
+            if (parentOf(target) !== draft.dir) await reloadDir(parentOf(target))
+            return
+          }
+          const outcome = draft.mode === 'folder'
+            ? await postJson(MKDIR_URL, { path: target }, target)
+            : await postJson(WRITE_URL, { path: target, content: '', mode: 'create' }, target)
+          if (outcome === null) return
+          if (!outcome.ok) {
+            setError(describeMutationFailure(outcome, t))
+            return
+          }
+          setSelected(target)
+          await reloadDir(draft.dir)
+          if (draft.mode === 'file') openFile(target)
+        }
+
+        /** 复制一个文件：同目录下的「xxx 副本」，重名就往后编号（Host 仍会拒绝覆盖）。 */
+        const copyEntry = async (path) => {
+          const dir = parentOf(path)
+          const name = nameOf(path)
+          const existing = new Set((levelsRef.current[dir]?.entries ?? []).map((entry) => entry.name))
+          let candidate = copyNameOf(name)
+          for (let index = 2; existing.has(candidate) && index < 20; index += 1) {
+            const dot = name.lastIndexOf('.')
+            candidate = dot <= 0 ? `${name} 副本 ${index}` : `${name.slice(0, dot)} 副本 ${index}${name.slice(dot)}`
+          }
+          const target = `${dir}/${candidate}`
+          const outcome = await postJson(COPY_URL, { from: path, to: target }, path)
+          if (outcome === null) return
+          if (!outcome.ok) {
+            setError(describeMutationFailure(outcome, t))
+            return
+          }
+          setSelected(target)
+          await reloadDir(dir)
+        }
+
+        /** 移动一个条目（拖拽落点）：目标已存在时由 Host 拒绝，不静默覆盖。 */
+        const moveEntry = async (from, to) => {
+          if (from === to || isInside(to, from)) return
+          const outcome = await postJson(RENAME_URL, { from, to }, from)
+          if (outcome === null) return
+          if (!outcome.ok) {
+            setError(describeMutationFailure(outcome, t))
+            return
+          }
+          setSelected(to)
+          await reloadDir(parentOf(from))
+          if (parentOf(to) !== parentOf(from)) await reloadDir(parentOf(to))
+        }
+
+        /** 点「删除」：先取一次版本闸基线（目录再问一次条目数），再亮确认条。 */
+        const armDelete = async (path, type) => {
+          setError(null)
+          setEditor(null)
+          setBusy(path)
+          const signal = controllerRef.current.signal
+          let version
+          try {
+            const stat = await ctx.remote.workspaceFiles.stat(sessionId, path, signal)
+            if (stat.ok) version = stat.value.version
+          } catch {
+            version = undefined
+          }
+          let count = 0
+          if (type === 'directory') {
+            try {
+              const listing = await ctx.remote.workspaceFiles.list(sessionId, path, signal)
+              if (listing.ok) count = listing.value.entries.length
+            } catch {
+              count = 0
+            }
+          }
+          if (!aliveRef.current) return
+          setBusy(null)
+          setPending({ path, type, version, count, stale: false })
+        }
+
+        /**
+         * 执行删除。目录按「空 / 非空」决定要不要递归：非空要用户点的是「递归删除」。
+         * @param recursive - 目录是否连同内容一起删。
+         * @returns 请求结束即返回。
+         */
+        const runDelete = async (recursive) => {
+          const target = pendingRef.current
+          if (target === null) return
+          const body = { path: target.path }
+          // 「仍然删除」= 用户已经知道对方变过了，这一次不带版本闸（与预览头部那个按钮同一套语义）。
+          if (target.version !== undefined && !target.stale) body.expectedVersion = target.version
+          if (target.type === 'directory') body.recursive = recursive
+          const outcome = await postJson(DELETE_URL, body, target.path)
+          if (outcome === null) return
+          if (!outcome.ok) {
+            if (outcome.code === 'stale-version') {
+              // 确认期间对方被改过：只提示，要删得再点一次「仍然删除」（这次不带版本闸）。
+              setPending({ ...target, stale: true })
+              return
+            }
+            if (outcome.code === 'not-empty') {
+              // 我们确认之后目录里多了东西：升级成递归确认，而不是替用户递归。基线已经过期
+              // （目录版本变了），所以这里丢掉它 —— 接下来这一下是用户面对新状态重新点的。
+              setPending({ ...target, count: Math.max(target.count, 1), stale: false, version: undefined })
+              return
+            }
+            setError(describeMutationFailure(outcome, t))
+            return
+          }
+          setPending(null)
+          setSelected(parentOf(target.path))
+          await reloadDir(parentOf(target.path))
+        }
+
+        const rows = []
+        const createHere = editor !== null && editor.mode !== 'rename' ? editor.dir : null
+        const inputRow = (depth, draft) => h('div', {
+          className: 'dsh-wef-row',
+          key: `input:${draft.dir}`,
+          style: { paddingLeft: `${String(6 + depth * 14)}px` },
+          'data-workspace-editor-files-input-row': draft.mode,
+        },
+        h('span', { className: 'dsh-wef-spacer' }),
+        h('span', { className: 'dsh-wef-glyph' }, glyph(draft.mode === 'folder' ? 'folder' : 'file', 14)),
+        h('input', {
+          className: 'dsh-wef-input',
+          'data-workspace-editor-files-input': draft.mode,
+          defaultValue: draft.mode === 'rename' ? nameOf(draft.path) : '',
+          placeholder: t('files.namePlaceholder'),
+          spellCheck: false,
+          autoFocus: true,
+          onKeyDown: (event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              void submitEditor(draft, event.currentTarget.value)
+              return
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              setEditor(null)
+            }
+          },
+          onBlur: (event) => { void submitEditor(draft, event.currentTarget.value) },
+        }))
+
+        const rowOf = (entry, path, depth) => {
+          const isDir = entry.type === 'directory'
+          const open = isDir && expanded.has(path)
+          return h('div', {
+            key: path,
+            className: 'dsh-wef-row',
+            draggable: true,
+            'data-workspace-editor-files-row': path,
+            'data-kind': entry.type,
+            'data-selected': selected === path ? 'true' : 'false',
+            'data-busy': busy === path ? 'true' : 'false',
+            'data-drop': dropOn === path ? 'true' : 'false',
+            style: { paddingLeft: `${String(6 + depth * 14)}px` },
+            onClick: () => { activate(path, entry.type) },
+            onDragStart: (event) => {
+              dragRef.current = path
+              try {
+                event.dataTransfer.setData('text/plain', path)
+                event.dataTransfer.effectAllowed = 'move'
+              } catch {
+                // 个别浏览器不给写 dataTransfer；移动逻辑只依赖 dragRef，照样可用。
+              }
+            },
+            onDragEnd: () => { dragRef.current = null; setDropOn(null) },
+            onDragOver: (event) => {
+              const from = dragRef.current
+              if (from === null || !isDir || from === path || isInside(path, from)) return
+              event.preventDefault()
+              try {
+                event.dataTransfer.dropEffect = 'move'
+              } catch {
+                // 同上：写不了 dropEffect 不影响落点判定。
+              }
+              if (dropOn !== path) setDropOn(path)
+            },
+            onDragLeave: () => { if (dropOn === path) setDropOn(null) },
+            onDrop: (event) => {
+              const from = dragRef.current
+              dragRef.current = null
+              setDropOn(null)
+              if (from === null || !isDir) return
+              event.preventDefault()
+              void moveEntry(from, `${path}/${nameOf(from)}`)
+            },
+          },
+          isDir
+            ? h('button', {
+              type: 'button',
+              className: 'dsh-wef-caret',
+              tabIndex: -1,
+              'aria-label': open ? 'collapse' : 'expand',
+              onClick: (event) => { event.stopPropagation(); toggle(path) },
+            }, glyph(open ? 'chevronOpen' : 'chevronClosed', 14))
+            : h('span', { className: 'dsh-wef-spacer' }),
+          h('span', { className: 'dsh-wef-glyph' }, glyph(isDir ? 'folder' : 'file', 14)),
+          h('span', { className: 'dsh-wef-name' }, entry.name),
+          h('span', { className: 'dsh-wef-actions' },
+            isDir && h('button', {
+              type: 'button',
+              className: 'dsh-wef-tool',
+              title: t('files.newFile'),
+              'data-workspace-editor-files-new-file': path,
+              onClick: (event) => { event.stopPropagation(); startCreate(path, 'file') },
+            }, glyph('newFile', 14)),
+            isDir && h('button', {
+              type: 'button',
+              className: 'dsh-wef-tool',
+              title: t('files.newFolder'),
+              'data-workspace-editor-files-new-folder': path,
+              onClick: (event) => { event.stopPropagation(); startCreate(path, 'folder') },
+            }, glyph('newFolder', 14)),
+            h('button', {
+              type: 'button',
+              className: 'dsh-wef-tool',
+              title: t('files.rename'),
+              'data-workspace-editor-files-rename': path,
+              onClick: (event) => { event.stopPropagation(); startRename(path) },
+            }, glyph('rename', 14)),
+            !isDir && h('button', {
+              type: 'button',
+              className: 'dsh-wef-tool',
+              title: t('files.copy'),
+              'data-workspace-editor-files-copy': path,
+              onClick: (event) => { event.stopPropagation(); void copyEntry(path) },
+            }, glyph('copy', 14)),
+            h('button', {
+              type: 'button',
+              className: 'dsh-wef-tool',
+              title: t('files.delete'),
+              'data-workspace-editor-files-delete': path,
+              onClick: (event) => { event.stopPropagation(); void armDelete(path, entry.type) },
+            }, glyph('trash', 14))))
+        }
+
+        /** 把一个目录的可见内容压平进 `rows`（递归，只走展开着的目录）。 */
+        const walk = (dir, depth) => {
+          const level = levels[dir]
+          if (level === undefined || level.phase === 'loading') {
+            rows.push(h('p', { className: 'dsh-wef-note', key: `loading:${dir}` }, t('files.loading')))
+            return
+          }
+          if (level.phase === 'failed') {
+            rows.push(h('p', { className: 'dsh-wef-note', key: `failed:${dir}` }, t('files.readFailed', { message: level.message })))
+            return
+          }
+          if (createHere === dir) rows.push(inputRow(depth, editor))
+          if (level.entries.length === 0 && createHere !== dir) {
+            rows.push(h('p', { className: 'dsh-wef-note', key: `empty:${dir}` }, t('files.empty')))
+          }
+          for (const entry of level.entries) {
+            const path = `${dir}/${entry.name}`
+            if (editor !== null && editor.mode === 'rename' && editor.path === path) {
+              rows.push(inputRow(depth, editor))
+              continue
+            }
+            rows.push(rowOf(entry, path, depth))
+            if (entry.type === 'directory' && expanded.has(path)) walk(path, depth + 1)
+          }
+          if (level.truncated) {
+            rows.push(h('p', { className: 'dsh-wef-note', key: `truncated:${dir}` }, t('files.truncated')))
+          }
+        }
+        walk(root, 0)
+
+        /** 一个路径是不是目录：根永远是；其余看它父级列表里的那条记录。 */
+        const isDirPath = (path) => {
+          if (path === root) return true
+          const entries = levels[parentOf(path)]?.entries ?? []
+          return entries.some((entry) => entry.name === nameOf(path) && entry.type === 'directory')
+        }
+        // 工具条上的动作落在「选中的是目录 → 它自己；选中的是文件 → 它的父目录」上。
+        const targetDir = selected !== null && isDirPath(selected) ? selected : parentOf(selected ?? root)
+
+        return h('div', {
+          className: 'dsh-wef-root',
+          'data-workspace-editor-files': 'ready',
+          'data-workspace-editor-files-root': root,
+        },
+        h('style', null, CSS),
+        h('div', { className: 'dsh-wef-bar' },
+          h('span', { className: 'dsh-wef-path', title: targetDir }, targetDir),
+          h('span', { className: 'dsh-wef-spacer' }),
+          h('button', {
+            type: 'button',
+            className: 'dsh-wef-tool',
+            title: t('files.newFile'),
+            'data-workspace-editor-files-new-file': targetDir,
+            disabled: busy !== null,
+            onClick: () => { startCreate(targetDir, 'file') },
+          }, glyph('newFile')),
+          h('button', {
+            type: 'button',
+            className: 'dsh-wef-tool',
+            title: t('files.newFolder'),
+            'data-workspace-editor-files-new-folder': targetDir,
+            disabled: busy !== null,
+            onClick: () => { startCreate(targetDir, 'folder') },
+          }, glyph('newFolder')),
+          h('button', {
+            type: 'button',
+            className: 'dsh-wef-tool',
+            title: t('files.refresh'),
+            'data-workspace-editor-files-refresh': '',
+            disabled: busy !== null,
+            onClick: () => { void reloadDir(targetDir) },
+          }, glyph('refresh'))),
+        error !== null && h('p', {
+          className: 'dsh-wef-banner',
+          'data-tone': 'error',
+          'data-workspace-editor-files-error': '',
+        },
+        h('span', { className: 'dsh-wef-banner-text' }, error),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-workspace-editor-files-dismiss': '',
+          onClick: () => { setError(null) },
+        }, t('files.cancel'))),
+        pending !== null && h('p', {
+          className: 'dsh-wef-banner',
+          'data-tone': 'warn',
+          'data-workspace-editor-files-confirm': pending.type,
+        },
+        h('span', { className: 'dsh-wef-banner-text' },
+          pending.type === 'directory'
+            ? t(pending.count > 0 ? 'files.confirmDeleteDir' : 'files.confirmDeleteEmptyDir', { name: nameOf(pending.path), count: pending.count })
+            : t('files.confirmDeleteFile', { name: nameOf(pending.path) }),
+          pending.stale ? ` ${t('files.stale')}` : ''),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-danger': 'true',
+          'data-workspace-editor-files-confirm-go': pending.type === 'directory' && pending.count > 0 ? 'recursive' : 'plain',
+          disabled: busy !== null,
+          onClick: () => { void runDelete(pending.stale || (pending.type === 'directory' && pending.count > 0)) },
+        }, pending.stale
+          ? t('files.force')
+          : pending.type === 'directory' && pending.count > 0 ? t('files.recursive') : t('files.delete')),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-workspace-editor-files-confirm-cancel': '',
+          onClick: () => { setPending(null) },
+        }, t('files.cancel'))),
+        h('div', {
+          className: 'dsh-wef-body',
+          'data-drop': dropOn === root ? 'true' : 'false',
+          onDragOver: (event) => {
+            const from = dragRef.current
+            if (from === null || parentOf(from) === root) return
+            event.preventDefault()
+            if (dropOn !== root) setDropOn(root)
+          },
+          onDragLeave: () => { if (dropOn === root) setDropOn(null) },
+          onDrop: (event) => {
+            const from = dragRef.current
+            dragRef.current = null
+            setDropOn(null)
+            if (from === null) return
+            event.preventDefault()
+            void moveEntry(from, `${root}/${nameOf(from)}`)
+          },
+        }, rows),
+        busy !== null && h('p', { className: 'dsh-wef-status', 'data-workspace-editor-files-busy': '' }, t('files.busy')))
+      }
+
+      return { FilesPanel, FilesTree }
+    }
+
     /** 浏览器侧需要的服务：槽位、文案、文档渲染器注册表、右侧栏页签，以及工作区文件的读接口。 */
     const inject = [
       'slots',
@@ -966,14 +1814,37 @@ window.__ModuleLoader__.load({
       'sidebarRight',
     ]
 
+    /** 「文件编辑」面板在 guide 卡片上的图标：一个「文件夹 + 加号」，与工具条上那枚同款。 */
+    function FilesGuideIcon(props) {
+      const size = props?.size ?? 16
+      return h('svg', {
+        width: size,
+        height: size,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: '1.2',
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+        focusable: 'false',
+        className: props?.className,
+      },
+      h('path', { d: ICON_PATHS.folder[0] }),
+      h('path', { d: 'M8 8.6v3' }),
+      h('path', { d: 'M6.5 10.1h3' }))
+    }
+
     /**
-     * 客户端插件正文：注册两档文档渲染器、编辑器页签类型与预览头部的「编辑」按钮。
+     * 客户端插件正文：注册两档文档渲染器、编辑器页签类型、预览头部的「编辑」「删除」按钮，
+     * 以及「文件编辑」工具面板（页签类型 + 自带文件树）。
      * @param ctx - 客户端根上下文。
      * @returns 无。
      */
     function apply(ctx) {
       const t = ctx.locale.bind(NS)
       const { DocumentBody, PaneBody, EditAction, DeleteAction } = createEditor(ctx)
+      const { FilesPanel } = createFilesPanel(ctx)
       const bands = [
         { id: DEFAULT_RENDERER_ID, extensions: DEFAULT_EXTENSIONS, priority: 'extension' },
         { id: OPTIONAL_RENDERER_ID, extensions: OPTIONAL_EXTENSIONS, priority: 'builtin' },
@@ -1024,6 +1895,52 @@ window.__ModuleLoader__.load({
         order: 6,
         locale: NS,
       }, DeleteAction)), 'workspace-editor: preview delete action')
+
+      // 「文件编辑」：一个自带文件树的右侧栏工具。没有 patterns —— 它是**页类型**，只能按 kind
+      // 打开（guide 卡片 / 快捷键 / 代码），因此不会参与任何文件的自动打开排名。
+      ctx.effect(() => ctx.sidebarRightTabs.register({
+        id: FILES_TAB_ID,
+        kind: FILES_KIND,
+        priority: 'builtin',
+        title: () => t('files.title'),
+        guide: [{
+          id: 'workspace-editor-files',
+          commandId: 'workspace.editor.files',
+          order: 20,
+          title: () => t('files.title'),
+          description: () => t('files.guide'),
+          icon: FilesGuideIcon,
+        }],
+      }), 'workspace-editor: files tab type')
+      ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
+        name: 'sidebar.right.pane.tab',
+        key: FILES_TAB_ID,
+        locale: NS,
+      }, FilesPanel)), 'workspace-editor: files panel body')
+
+      // 快捷键可选：`shortcuts` 服务不在也不影响面板（guide 卡片照样能打开它）。
+      ctx.inject(['shortcuts'], (scoped) => {
+        scoped.effect(() => scoped.shortcuts.register({
+          id: 'workspace.editor.files',
+          label: () => t('files.shortcut'),
+          aliases: ['workspace editor files', '文件编辑'],
+          defaults: {
+            'desktop:macos': { code: 'KeyE', modifiers: ['primary', 'alt'] },
+            'desktop:windows': { code: 'KeyE', modifiers: ['primary', 'alt'] },
+            'desktop:linux': { code: 'KeyE', modifiers: ['primary', 'alt'] },
+            'web:macos': { code: 'KeyE', modifiers: ['primary', 'alt'] },
+            'web:windows': { code: 'KeyE', modifiers: ['primary', 'alt'] },
+            'web:linux': { code: 'KeyE', modifiers: ['primary', 'alt'] },
+          },
+          regions: ['page', 'editable', 'terminal'],
+          modals: [],
+          resolve: ({ target }) => {
+            const capture = ctx.sidebarRight.commandTarget(target)
+            if (capture === undefined) return { status: 'blocked', reason: t('files.noRoot') }
+            return { status: 'handled', run: () => { ctx.sidebarRight.openTabFromTarget(FILES_KIND, capture) } }
+          },
+        }), 'workspace-editor: files shortcut')
+      })
     }
 
     return { name: 'workspace-editor', inject, apply }

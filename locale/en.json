@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Workspace File Editor",
-    "description": "Edit and save workspace files right in the sidebar's file preview: the shipped renderers are read-only, this plugin adds the writing half."
+    "description": "Edit and organise workspace files right in the sidebar: save from the preview, plus a File editor tool with its own file tree (create, rename, copy, delete, drag to move)."
   }
 }

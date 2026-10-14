@@ -1,17 +1,22 @@
 /**
  * @module @dongasai/dsh-editor
  *
- * **工作区文件编辑器 —— Host 半边**：给 Web GUI 提供「写」与「删」两条工作区文件变更入口，
- * 浏览器那半边（`./client.js`）在右侧栏的文件预览里渲染可编辑、可保存的正文，并在预览头部
- * 加一个「删除」按钮。
+ * **工作区文件编辑器 —— Host 半边**：给 Web GUI 提供五条工作区文件变更入口，浏览器那半边
+ * （`./client.js`）在右侧栏的文件预览里渲染可编辑、可保存的正文，提供预览头部的「删除」按钮，
+ * 并注册一个自带文件树的「文件编辑」工具面板。
  *
- * ## 两条路由
+ * ## 五条路由
  *
- * - `POST /workspace-editor/write`：带版本闸的整文件写入。
- * - `POST /workspace-editor/delete`：带版本闸的删除。`ctx.fs` 的变更面只有 `writeText` /
- *   `editText`，**没有删除接口**，所以这一步落到 `node:fs` 的 `unlink`；代价是 `ctx.fs`
- *   自身的沙箱策略围栏不再自动生效，必须由本模块按同一份 `ctx.sandboxPolicy.resolve(...)`
- *   显式补上（见约束 2）。
+ * - `POST /workspace-editor/write`：带版本闸的整文件写入（新建文件也走它，`mode: 'create'`）。
+ * - `POST /workspace-editor/delete`：带版本闸的删除，支持文件、空目录（`rmdir`）与非空目录
+ *   （`recursive: true` 才递归）。
+ * - `POST /workspace-editor/mkdir`：新建单个目录（不递归建父级）。
+ * - `POST /workspace-editor/rename`：重命名 / 移动（文件与目录同一套；目标必须不存在）。
+ * - `POST /workspace-editor/copy`：复制文件（`COPYFILE_EXCL`，目标已存在就拒绝）。
+ *
+ * 后四条都落到 `node:fs`：`ctx.fs` 的变更面只有 `writeText` / `editText`，**没有删除、改名、
+ * 新建目录或复制的接口**。代价是 `ctx.fs` 自身的沙箱策略围栏不再自动生效，必须由本模块按同一份
+ * `ctx.sandboxPolicy.resolve(...)` 显式补上（见约束 2）。
  *
  * ## 为什么要自己开一条 HTTP 路由
  *
@@ -33,26 +38,37 @@
  * 2. **变更必须过三道闸**：Connection 信任围栏 → 会话工作区包含性检查
  *    （`ctx.fs.contains(会话根, 目标)`，越界一律 403）→ 沙箱策略围栏
  *    （`ctx.sandboxPolicy.resolve({ session })`，`read-only` 会话照样拒绝）。写路径的第三道闸
- *    由 `ctx.fs.writeText` 自己执行；**删除没有这层自动保护**（`unlink` 绕过了 `ctx.fs`），
- *    必须自己按 `policy.mode === 'read-only'` 拒绝。三道闸任一被绕过都是安全回归，不要为了
- *    「方便保存 / 方便删除」放宽其中任何一道。
- * 3. **变更都带版本闸**：客户端把「自己看到的那份文件的版本」作为 `expectedVersion` 送上来，
- *    Host 写时用 `{ kind: 'replaceIfVersion' }`、删时在 `unlink` 前逐字比对同一个版本令牌；
- *    磁盘在期间变过就返回 `stale-version`，由用户显式选择「覆盖保存」/「仍然删除」。
- *    不传 `expectedVersion` 才是无条件变更（只允许发生在用户点过这两个按钮之后）。
+ *    由 `ctx.fs.writeText` 自己执行；**其余四条没有这层自动保护**（`node:fs` 绕过了 `ctx.fs`），
+ *    必须走 `guardMutation()` 按 `policy.mode === 'read-only'` 自己拒绝。三道闸任一被绕过都是
+ *    安全回归，不要为了「方便保存 / 方便删除」放宽其中任何一道。
+ * 3. **破坏性变更都带版本闸**：写用 `{ kind: 'replaceIfVersion' }`、删在落盘前逐字比对同一个
+ *    版本令牌（`expectedVersion` 来自客户端「看到的那一份」），对不上就返回 `stale-version`，
+ *    由用户显式选择「覆盖保存」/「仍然删除」。改名与复制不带版本闸 —— 它们防的是另一件事：
+ *    **目标必须不存在**（改名预检 + 复制用 `COPYFILE_EXCL` 做成内核级排他）。
  * 4. **不改观察状态**：这里刻意**不** `emit('fs/observed', …)`。FS 观察策略要求 `edit`
  *    前必须读过文件，人工在 GUI 里改过的文件对模型来说就是「没读过」——模型应当重新
  *    `read` 之后再改，这是正确的语义，别用一条 emit 把它「喂」成已观察。
  */
 
 import { Buffer } from 'node:buffer'
-import { unlink } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { copyFile, mkdir as makeDir, rename as renamePath, rm, rmdir, unlink } from 'node:fs/promises'
+import { dirname, isAbsolute, relative } from 'node:path'
 
 /** 写文件路由的路径；与客户端半边拼出的 URL 必须逐字一致。 */
 const WRITE_PATH = '/workspace-editor/write'
 
-/** 删除文件路由的路径；与客户端半边拼出的 URL 必须逐字一致。 */
+/** 删除条目（文件 / 目录）路由的路径；与客户端半边拼出的 URL 必须逐字一致。 */
 const DELETE_PATH = '/workspace-editor/delete'
+
+/** 新建目录路由的路径；与客户端半边拼出的 URL 必须逐字一致。 */
+const MKDIR_PATH = '/workspace-editor/mkdir'
+
+/** 重命名 / 移动路由的路径；与客户端半边拼出的 URL 必须逐字一致。 */
+const RENAME_PATH = '/workspace-editor/rename'
+
+/** 复制文件路由的路径；与客户端半边拼出的 URL 必须逐字一致。 */
+const COPY_PATH = '/workspace-editor/copy'
 
 /** 一次保存的请求体上限（字节）。 */
 const MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -60,7 +76,7 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024
 /** 单次写入的文本上限（UTF-16 码元）。 */
 const MAX_CONTENT_CHARS = 4 * 1024 * 1024
 
-/** 单次变更请求的墙钟上限：文件系统迟迟不返回时不让请求无限挂着（写、删共用）。 */
+/** 单次变更请求的墙钟上限：文件系统迟迟不返回时不让请求无限挂着（五条路由共用）。 */
 const REQUEST_TIMEOUT_MS = 30 * 1000
 
 /** 结构化 `FsErrorCode` → 线上失败码与 HTTP 状态。按 code 判别，绝不看 message。 */
@@ -79,33 +95,34 @@ const FS_FAILURES = {
 }
 
 /**
- * `unlink` 的 errno → 线上失败码与 HTTP 状态。表里没有的一律走 500，不猜（同约束 5）。
+ * `node:fs` 的 errno → 线上失败码与 HTTP 状态（删除 / 新建目录 / 改名 / 复制共用）。
+ * 表里没有的一律走 500，不猜（同约束 5）。
  */
-const REMOVE_FAILURES = {
+const NODE_FAILURES = {
   ENOENT: { status: 404, code: 'not-found' },
-  ENOTDIR: { status: 404, code: 'not-found' },
+  ENOTDIR: { status: 409, code: 'not-directory' },
   EISDIR: { status: 409, code: 'not-regular-file' },
+  ENOTEMPTY: { status: 409, code: 'not-empty' },
+  EEXIST: { status: 409, code: 'target-exists' },
+  EINVAL: { status: 409, code: 'invalid-target' },
+  EXDEV: { status: 409, code: 'invalid-target' },
+  ENAMETOOLONG: { status: 400, code: 'bad-request' },
   EACCES: { status: 403, code: 'denied' },
   EPERM: { status: 403, code: 'denied' },
   EROFS: { status: 403, code: 'denied' },
 }
 
 /**
- * 两条变更路由：各自的路径、校验器、落盘实现，以及 500 时用的线上失败码。
- * 路由外壳（围栏 / 方法 / 媒体类型 / 生命周期 / 应答）两份共用。
+ * 五条变更路由：各自的路径、校验器、落盘实现，以及 500 时用的线上失败码。
+ * 路由外壳（围栏 / 方法 / 媒体类型 / 生命周期 / 应答）五份共用。
  */
-const WRITE_ENDPOINT = {
-  path: WRITE_PATH,
-  failure: 'write-failed',
-  parse: parseWriteRequest,
-  run: writeWorkspaceFile,
-}
-const DELETE_ENDPOINT = {
-  path: DELETE_PATH,
-  failure: 'delete-failed',
-  parse: parseDeleteRequest,
-  run: deleteWorkspaceFile,
-}
+const ENDPOINTS = [
+  { path: WRITE_PATH, failure: 'write-failed', parse: parseWriteRequest, run: writeWorkspaceFile },
+  { path: DELETE_PATH, failure: 'delete-failed', parse: parseDeleteRequest, run: deleteWorkspaceEntry },
+  { path: MKDIR_PATH, failure: 'mkdir-failed', parse: parseMkdirRequest, run: mkdirWorkspaceEntry },
+  { path: RENAME_PATH, failure: 'rename-failed', parse: parseRenameRequest, run: renameWorkspaceEntry },
+  { path: COPY_PATH, failure: 'copy-failed', parse: parseCopyRequest, run: copyWorkspaceEntry },
+]
 
 /** Cordis 插件名（Loader 诊断用）。 */
 export const name = 'workspace-editor'
@@ -114,12 +131,12 @@ export const name = 'workspace-editor'
 export const inject = ['webServer', 'connection', 'fs', 'sandboxPolicy', 'sessions']
 
 /**
- * Host 插件正文：注册写、删两条路由。
+ * Host 插件正文：注册五条变更路由（写 / 删 / 新建目录 / 改名 / 复制）。
  * @param ctx - Host 上下文；注册是 effect，随插件卸载一起撤销。
  * @returns 无。
  */
 export function apply(ctx) {
-  for (const endpoint of [WRITE_ENDPOINT, DELETE_ENDPOINT]) {
+  for (const endpoint of ENDPOINTS) {
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact',
       path: endpoint.path,
@@ -237,7 +254,7 @@ function parseWriteRequest(value) {
 }
 
 /**
- * 解析并校验删除请求体。删除没有正文，只有「删哪个」与可选的版本闸基线。
+ * 解析并校验删除请求体。删除没有正文，只有「删哪个」、可选的版本闸基线与递归开关。
  * @param value - 反序列化后的 JSON 值。
  * @returns 校验过的删除意图。
  * @throws {RequestError} 400 —— 任一字段类型不对。
@@ -249,7 +266,51 @@ function parseDeleteRequest(value) {
   const expectedVersion = value.expectedVersion === undefined || value.expectedVersion === null
     ? undefined
     : requireString(value.expectedVersion, 'expectedVersion')
-  return { sessionId, path, expectedVersion }
+  if (value.recursive !== undefined && typeof value.recursive !== 'boolean') {
+    throw new RequestError(400, 'bad-request', 'recursive must be a boolean')
+  }
+  return { sessionId, path, expectedVersion, recursive: value.recursive === true }
+}
+
+/**
+ * 解析并校验新建目录请求体。
+ * @param value - 反序列化后的 JSON 值。
+ * @returns 校验过的建目录意图。
+ * @throws {RequestError} 400 —— 任一字段类型不对。
+ */
+function parseMkdirRequest(value) {
+  if (!isPlainObject(value)) throw new RequestError(400, 'bad-request', 'body must be a JSON object')
+  return { sessionId: requireString(value.sessionId, 'sessionId'), path: requireString(value.path, 'path') }
+}
+
+/**
+ * 解析并校验改名 / 移动请求体。
+ * @param value - 反序列化后的 JSON 值。
+ * @returns 校验过的改名意图（源与目标）。
+ * @throws {RequestError} 400 —— 任一字段类型不对。
+ */
+function parseRenameRequest(value) {
+  if (!isPlainObject(value)) throw new RequestError(400, 'bad-request', 'body must be a JSON object')
+  return {
+    sessionId: requireString(value.sessionId, 'sessionId'),
+    from: requireString(value.from, 'from'),
+    to: requireString(value.to, 'to'),
+  }
+}
+
+/**
+ * 解析并校验复制请求体。
+ * @param value - 反序列化后的 JSON 值。
+ * @returns 校验过的复制意图（源与目标）。
+ * @throws {RequestError} 400 —— 任一字段类型不对。
+ */
+function parseCopyRequest(value) {
+  if (!isPlainObject(value)) throw new RequestError(400, 'bad-request', 'body must be a JSON object')
+  return {
+    sessionId: requireString(value.sessionId, 'sessionId'),
+    from: requireString(value.from, 'from'),
+    to: requireString(value.to, 'to'),
+  }
 }
 
 /**
@@ -292,73 +353,261 @@ async function writeWorkspaceFile(ctx, input, signal) {
 }
 
 /**
- * 真正的删除：会话根 → 目标 → 三道闸 → 版本闸 → `unlink`。
+ * 真正的删除：会话根 → 目标 → 三道闸 → 版本闸 → `unlink` / `rmdir` / `rm -r`。
  *
- * 与写路径的差别只有两处：第三道闸要自己执行（`unlink` 不经过 `ctx.fs`，它那层沙箱围栏
- * 不会自动生效），以及 `unlink` 之前要拿同一个版本令牌比对一次。
+ * 与写路径的差别有两处：第三道闸要自己执行（`node:fs` 不经过 `ctx.fs`，它那层沙箱围栏不会
+ * 自动生效），以及删除之前要拿同一个版本令牌比对一次。目录默认只删空的（`rmdir` 的
+ * `ENOTEMPTY` 会被翻成 409 `not-empty`）；要连同内容一起删，客户端必须显式送
+ * `recursive: true` —— 那是用户在面板里点过「递归删除」之后的事。
  * @param ctx - Host 上下文。
  * @param input - 校验过的删除意图。
  * @param signal - 本次调用的取消信号。
  * @returns 线上成功结果（被删掉的路径）。
  * @throws {RequestError | Error} 失败时抛出带 code 的错误，交给 `sendFailure` 映射。
  */
-async function deleteWorkspaceFile(ctx, input, signal) {
-  const { session, workspaceRoot } = await resolveSessionRoot(ctx, input.sessionId, signal)
+async function deleteWorkspaceEntry(ctx, input, signal) {
+  const { workspaceRoot, target } = await guardMutation(ctx, input.sessionId, input.path, signal)
 
-  // 先看路径本身：目录不递归删、符号链接不跟着删（否则会删穿到工作区外）。
-  const info = await ctx.fs.lstat(input.path, { cwd: workspaceRoot }, signal)
+  // 先看路径本身：符号链接一律拒绝（不跟着删到工作区外），目录与普通文件之外的类型也拒绝。
+  const info = await entryNoFollow(ctx, input.path, workspaceRoot, signal)
   if (info === undefined) {
-    throw new RequestError(404, 'not-found', `cannot delete "${input.path}": no such file`)
+    throw new RequestError(404, 'not-found', `cannot delete "${input.path}": no such entry`)
   }
-  if (info.type !== 'file') {
-    throw new RequestError(409, 'not-regular-file', `cannot delete "${input.path}": not a regular file (${info.type})`)
-  }
-
-  const target = await ctx.fs.resolve(input.path, { cwd: workspaceRoot, signal })
-  const rootTarget = await ctx.fs.resolve(workspaceRoot, { signal })
-  if (!ctx.fs.contains(rootTarget, target)) {
-    throw new RequestError(403, 'outside-workspace', `cannot delete "${target.displayPath}": outside the session workspace`)
-  }
-
-  // 第三道闸自己补：`unlink` 绕过 ctx.fs，沙箱策略要在这里按同一份解析结果拒绝。
-  const policy = session === undefined ? ctx.sandboxPolicy.resolve() : ctx.sandboxPolicy.resolve({ session })
-  if (policy.mode === 'read-only') {
-    throw new RequestError(403, 'denied', `cannot delete "${target.displayPath}": the session sandbox is read-only`)
+  if (info.type !== 'file' && info.type !== 'directory') {
+    throw new RequestError(409, 'not-regular-file', `cannot delete "${input.path}": not a file or directory (${info.type})`)
   }
 
   // 版本闸：与写路径同一个版本令牌；客户端送来「确认删除时看到的那一份」，对不上就停。
+  // 目录的版本令牌只看它自己的直接条目（mtime/ctime），所以它盖住「目录里刚多了/少了东西」，
+  // 盖不住「某个子目录内部被改了」——递归删除的残留风险写在 IMPLEMENTATION.md 里。
   const current = await ctx.fs.stat(target, signal)
   if (current === undefined) {
-    throw new RequestError(404, 'not-found', `cannot delete "${target.displayPath}": no such file`)
+    throw new RequestError(404, 'not-found', `cannot delete "${target.displayPath}": no such entry`)
   }
   if (input.expectedVersion !== undefined && current.version !== input.expectedVersion) {
-    throw new RequestError(409, 'stale-version', `cannot delete "${target.displayPath}": the file changed since it was read`)
+    throw new RequestError(409, 'stale-version', `cannot delete "${target.displayPath}": the entry changed since it was read`)
   }
 
-  await removeFile(target.displayPath, ctx.fs.processPath(target))
+  await removeEntry(target.displayPath, ctx.fs.processPath(target), info.type === 'directory', input.recursive)
   return { ok: true, path: target.displayPath, operation: 'delete' }
 }
 
 /**
- * 直接删掉一个普通文件。
+ * 新建单个目录（不递归建父级：父级不存在就 404，父级不是目录就 409）。
+ * @param ctx - Host 上下文。
+ * @param input - 校验过的建目录意图。
+ * @param signal - 本次调用的取消信号。
+ * @returns 线上成功结果（新目录路径）。
+ * @throws {RequestError | Error} 失败时抛出带 code 的错误，交给 `sendFailure` 映射。
+ */
+async function mkdirWorkspaceEntry(ctx, input, signal) {
+  const { workspaceRoot, target } = await guardMutation(ctx, input.sessionId, input.path, signal)
+
+  const existing = await entryNoFollow(ctx, input.path, workspaceRoot, signal)
+  if (existing !== undefined) {
+    throw new RequestError(409, 'target-exists', `cannot create "${input.path}": it already exists (${existing.type})`)
+  }
+  await requireParentDirectory(ctx, input.path, workspaceRoot, signal)
+  await makeEntryDirectory(target.displayPath, ctx.fs.processPath(target))
+  return { ok: true, path: target.displayPath, operation: 'mkdir' }
+}
+
+/**
+ * 重命名 / 移动一个文件或目录：源必须存在（且不是符号链接），目标必须不存在，两侧都在工作区内。
  *
- * `ctx.fs` 没有删除接口（变更面只有 `writeText` / `editText`），所以这里退回 `node:fs` 的
- * `unlink` —— 这是本插件唯一一处不走 `ctx.fs` 的变更，errno 在这里翻译成与 `FS_FAILURES`
- * 同一套线上码，表里没有的一律 500（不猜）。
+ * 刻意**不带版本闸**：改名不改内容，用户点它的意思是「把这个名字换成那个名字」；真正要防的是
+ * 「把别人的文件顶掉」，所以这里卡的是「目标必须不存在」。`fs.rename` 本身会覆盖已存在的目标，
+ * 预检与它之间那个毫秒级窗口与删除同源，写在 IMPLEMENTATION.md 里。
+ * @param ctx - Host 上下文。
+ * @param input - 校验过的改名意图。
+ * @param signal - 本次调用的取消信号。
+ * @returns 线上成功结果（源与目标路径）。
+ * @throws {RequestError | Error} 失败时抛出带 code 的错误，交给 `sendFailure` 映射。
+ */
+async function renameWorkspaceEntry(ctx, input, signal) {
+  const from = await guardMutation(ctx, input.sessionId, input.from, signal)
+  const info = await entryNoFollow(ctx, input.from, from.workspaceRoot, signal)
+  if (info === undefined) {
+    throw new RequestError(404, 'not-found', `cannot rename "${input.from}": no such entry`)
+  }
+  if (info.type !== 'file' && info.type !== 'directory') {
+    throw new RequestError(409, 'not-regular-file', `cannot rename "${input.from}": not a file or directory (${info.type})`)
+  }
+
+  const to = await guardMutation(ctx, input.sessionId, input.to, signal)
+  if (from.target.targetKey === to.target.targetKey) {
+    throw new RequestError(409, 'invalid-target', `"${input.from}" and "${input.to}" are the same path`)
+  }
+  // 目录不能搬进自己的子树（`rename` 会给出 EINVAL，这里先判一次好给出人话）。
+  const inside = relative(from.target.targetKey, to.target.targetKey)
+  if (info.type === 'directory' && inside !== '' && !inside.startsWith('..') && !isAbsolute(inside)) {
+    throw new RequestError(409, 'invalid-target', `cannot move "${input.from}" into itself`)
+  }
+  const existing = await entryNoFollow(ctx, input.to, to.workspaceRoot, signal)
+  if (existing !== undefined) {
+    throw new RequestError(409, 'target-exists', `cannot rename to "${input.to}": it already exists (${existing.type})`)
+  }
+  await requireParentDirectory(ctx, input.to, to.workspaceRoot, signal)
+  await moveEntry(from.target.displayPath, from.target.targetKey, to.target.targetKey)
+  return { ok: true, from: from.target.displayPath, to: to.target.displayPath, operation: 'rename' }
+}
+
+/**
+ * 复制一个文件（目录不支持：递归复制没有确认 UI 承载，也不在这次的范围里）。
+ *
+ * 目标用 `COPYFILE_EXCL` 写：预检之外再叠一道**原子**的排他，目标已存在时由内核直接 EEXIST，
+ * 不存在「检查完到写入之间被别人抢先」的窗口（这是复制比改名严格的地方）。
+ * @param ctx - Host 上下文。
+ * @param input - 校验过的复制意图。
+ * @param signal - 本次调用的取消信号。
+ * @returns 线上成功结果（源与目标路径）。
+ * @throws {RequestError | Error} 失败时抛出带 code 的错误，交给 `sendFailure` 映射。
+ */
+async function copyWorkspaceEntry(ctx, input, signal) {
+  const from = await guardMutation(ctx, input.sessionId, input.from, signal)
+  const info = await entryNoFollow(ctx, input.from, from.workspaceRoot, signal)
+  if (info === undefined) {
+    throw new RequestError(404, 'not-found', `cannot copy "${input.from}": no such entry`)
+  }
+  if (info.type !== 'file') {
+    throw new RequestError(409, 'not-regular-file', `cannot copy "${input.from}": not a regular file (${info.type})`)
+  }
+
+  const to = await guardMutation(ctx, input.sessionId, input.to, signal)
+  if (from.target.targetKey === to.target.targetKey) {
+    throw new RequestError(409, 'invalid-target', `"${input.from}" and "${input.to}" are the same path`)
+  }
+  await requireParentDirectory(ctx, input.to, to.workspaceRoot, signal)
+  await copyEntry(from.target.displayPath, from.target.targetKey, to.target.targetKey)
+  return { ok: true, from: from.target.displayPath, to: to.target.displayPath, operation: 'copy' }
+}
+
+/**
+ * 变更目标的公共前置：会话根 → 路径围栏 → 沙箱策略。
+ *
+ * 走 `node:fs` 的四条路由都从这里过：写路径把策略交给 `ctx.fs.writeText` 自己判，这四条没有
+ * 那层自动保护，所以「解析同一份 `ctx.sandboxPolicy.resolve({ session })` 并拒绝 `read-only`」
+ * 必须由这里执行 —— 这是补回被绕过的那道闸，不是额外加的一层。
+ * @param ctx - Host 上下文。
+ * @param sessionId - 请求里的会话标识。
+ * @param path - 相对工作区根或绝对的路径。
+ * @param signal - 取消信号。
+ * @returns 工作区根与该路径解析出的目标。
+ * @throws {RequestError} 403 —— 目标不在会话工作区内，或会话沙箱是 `read-only`。
+ */
+async function guardMutation(ctx, sessionId, path, signal) {
+  const { session, workspaceRoot } = await resolveSessionRoot(ctx, sessionId, signal)
+  const target = await ctx.fs.resolve(path, { cwd: workspaceRoot, signal })
+  const rootTarget = await ctx.fs.resolve(workspaceRoot, { signal })
+  if (!ctx.fs.contains(rootTarget, target)) {
+    throw new RequestError(403, 'outside-workspace', `"${target.displayPath}" is outside the session workspace`)
+  }
+  const policy = session === undefined ? ctx.sandboxPolicy.resolve() : ctx.sandboxPolicy.resolve({ session })
+  if (policy.mode === 'read-only') {
+    throw new RequestError(403, 'denied', `cannot change "${target.displayPath}": the session sandbox is read-only`)
+  }
+  return { workspaceRoot, target }
+}
+
+/**
+ * 读一次路径条目，并拒绝符号链接 —— 删除 / 改名 / 复制都不跟软链，否则会穿到工作区外。
+ * @param ctx - Host 上下文。
+ * @param path - 待查的路径。
+ * @param workspaceRoot - 相对路径的基准。
+ * @param signal - 取消信号。
+ * @returns `lstat` 结果（`undefined` 表示不存在），调用方自己判类型。
+ * @throws {RequestError} 409 —— 该路径本身是符号链接。
+ */
+async function entryNoFollow(ctx, path, workspaceRoot, signal) {
+  const info = await ctx.fs.lstat(path, { cwd: workspaceRoot }, signal)
+  if (info !== undefined && info.type === 'symlink') {
+    throw new RequestError(409, 'not-regular-file', `"${path}" is a symbolic link`)
+  }
+  return info
+}
+
+/**
+ * 目标路径的父级必须已经存在且是目录（新建 / 改名 / 复制都不递归造中间层）。
+ * @param ctx - Host 上下文。
+ * @param path - 目标路径。
+ * @param workspaceRoot - 相对路径的基准。
+ * @param signal - 取消信号。
+ * @returns 无。
+ * @throws {RequestError} 404 / 409 —— 父级不存在、或不是目录。
+ */
+async function requireParentDirectory(ctx, path, workspaceRoot, signal) {
+  const parent = dirname(path)
+  if (parent === '' || parent === '.' || parent === path) return
+  const info = await ctx.fs.lstat(parent, { cwd: workspaceRoot }, signal)
+  if (info === undefined) {
+    throw new RequestError(404, 'not-found', `cannot use "${path}": the parent directory does not exist`)
+  }
+  if (info.type !== 'directory') {
+    throw new RequestError(409, 'not-directory', `cannot use "${path}": the parent is not a directory (${info.type})`)
+  }
+}
+
+/**
+ * `node:fs` 侧的实际删除：普通文件 `unlink`、目录 `rmdir` 或 `rm -r`。
  * @param displayPath - 给人看的路径（错误消息用）。
- * @param absolutePath - `ctx.fs.processPath(target)` 给出的执行世界绝对路径。
+ * @param absolutePath - 执行世界的绝对路径。
+ * @param directory - 目标是目录时为 true。
+ * @param recursive - 目录是否连内容一起删（用户已经点过「递归删除」）。
  * @returns 删除完成即返回。
  * @throws {RequestError | Error} 已映射的 errno 抛 `RequestError`，其余抛原错误。
  */
-async function removeFile(displayPath, absolutePath) {
+async function removeEntry(displayPath, absolutePath, directory, recursive) {
   try {
-    await unlink(absolutePath)
+    if (!directory) await unlink(absolutePath)
+    else if (recursive) await rm(absolutePath, { recursive: true })
+    else await rmdir(absolutePath)
   } catch (error) {
-    const errno = typeof error?.code === 'string' ? error.code : undefined
-    const mapped = errno === undefined ? undefined : REMOVE_FAILURES[errno]
-    const message = `cannot delete "${displayPath}": ${messageOf(error)}`
-    throw mapped === undefined ? new Error(message, { cause: error }) : new RequestError(mapped.status, mapped.code, message)
+    throw nodeFailure(error, 'cannot delete', displayPath)
   }
+}
+
+/** 新建目录；EEXIST 由 `NODE_FAILURES` 翻成 409 `target-exists`。 */
+async function makeEntryDirectory(displayPath, absolutePath) {
+  try {
+    await makeDir(absolutePath)
+  } catch (error) {
+    throw nodeFailure(error, 'cannot create', displayPath)
+  }
+}
+
+/** 重命名 / 移动；覆盖已存在目标的风险由调用方的预检 + 文档承担。 */
+async function moveEntry(displayPath, absolutePath, destination) {
+  try {
+    await renamePath(absolutePath, destination)
+  } catch (error) {
+    throw nodeFailure(error, 'cannot rename', displayPath)
+  }
+}
+
+/** 复制文件；`COPYFILE_EXCL` 保证「目标已存在」是内核级拒绝，不是预检。 */
+async function copyEntry(displayPath, absolutePath, destination) {
+  try {
+    await copyFile(absolutePath, destination, fsConstants.COPYFILE_EXCL)
+  } catch (error) {
+    throw nodeFailure(error, 'cannot copy', displayPath)
+  }
+}
+
+/**
+ * `node:fs` 的 errno 翻译成线上失败码。
+ *
+ * 这四条路由是本插件唯一不走 `ctx.fs` 的变更，抛出来的是 Node 的 `Error`（`code: 'ENOENT'`
+ * 这类）而不是 `FsError`，所以在这里翻成与 `FS_FAILURES` 同一套线上码；表里没有的一律 500。
+ * @param error - `node:fs` 抛出的值。
+ * @param verb - 失败动作（拼错误消息用）。
+ * @param displayPath - 给人看的路径。
+ * @returns 已映射的 `RequestError`，或原错误（交给 500 分支）。
+ */
+function nodeFailure(error, verb, displayPath) {
+  const errno = typeof error?.code === 'string' ? error.code : undefined
+  const mapped = errno === undefined ? undefined : NODE_FAILURES[errno]
+  const message = `${verb} "${displayPath}": ${messageOf(error)}`
+  return mapped === undefined ? new Error(message, { cause: error }) : new RequestError(mapped.status, mapped.code, message)
 }
 
 /**
