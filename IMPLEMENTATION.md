@@ -46,6 +46,7 @@ Harness 启动（profile 作用域）
        └─ shortcuts.register                workspace.editor.files（Ctrl/Cmd+Alt+E）
                     ↓ 三个入口共用
               EditorSurface：读盘 → 草稿 → 版本闸保存 → 冲突横幅
+                    ├─ 语法高亮层：textarea 底下那层可见文字（字透明）+ Custom Highlight API 上色
                     ↓ 读走 ctx.remote.workspaceFiles.readBytes / list / stat / changes（官方只读接口）
                     ↓ 写走 fetch('/workspace-editor/*')（本插件自己的五条路由）
 ```
@@ -253,7 +254,7 @@ route(ctx, req, res, endpoint)
 内容时，多打一个 `)` 会把整段变成**逗号表达式** —— `return h(...), menu && h(...)` 的返回值是
 最后一个 `&&`（菜单关着就是 `false`），React 渲染 `false` 等于什么都不画：**白屏、控制台没有
 任何报错**。`node --check` 只验语法，这种语义错误它看不见；要用 acorn 确认那个 `return` 仍是
-`CallExpression` 才算数。两条教训都固化在 AGENTS.md 约束 18。
+`CallExpression` 才算数。两条教训都固化在 AGENTS.md 约束 19。
 
 **2. 纯文本而不是芯片。** 带结构化引用的插入（`slash/input-insert-reference`）只对内通过 scoped
 event 开放，不跨插件边界；而公开面只有 `insertText`。所以 `@路径#L行号` 以普通字符落进输入框，
@@ -329,6 +330,52 @@ event 开放，不跨插件边界；而公开面只有 `insertText`。所以 `@�
 版本抓在**第一次**点击而不是第二次，是为了让闸门盖住「用户在犹豫」的那段真实时间窗：
 如果抓在第二次点击的瞬间，闸门就退化成「stat 与 unlink 之间没人动过」，几乎等于没有。
 
+## 语法高亮：为什么是「高亮层 + Custom Highlight API」
+
+编辑器正文是一个 `<textarea>`。要让它有颜色，只有一条稳的路：**在 textarea 底下铺一层等宽文本
+（高亮层）**，textarea 自己的字设为透明（只留 `caret-color` 与半透明的 `::selection`），看得见的
+字形全部来自高亮层。两层必须**逐字逐行重合**，所以：
+
+- 字体、字号、行高、`tab-size`、内边距、`white-space` / `overflow-wrap` 放在**同一条 CSS 规则**里
+  声明（`.dsh-we-editor,.dsh-we-hl`），避免两边各写一份慢慢跑偏；
+- 高亮层的宽度每轮渲染后按 `textarea.clientWidth` 贴一次（textarea 冒出竖向滚动条时它的内容宽度
+  会窄一截，不贴就会出现两套换行点）；滚动位置同样每轮贴，并在 `onScroll` 里直接贴；
+- **正文结尾是换行（或正文为空）时，高亮层要多一个 `<br>`**：textarea 会给「最后一个换行之后的
+  那个空行」留一行高度，而块级文本里结尾的换行**不产生行盒** —— 不补这一下，滚到底部时两层差
+  一行；
+- 正文在两层都按 LF 归一（textarea 的 value 本来就把 CRLF 归一成 LF）。
+
+上色**不用 `<span>` 包令牌**，而是 Custom Highlight API（`Range` + `::highlight()`）：高亮层里只有
+一个文本节点，一个 DOM 节点都不加。理由是实测（无头 Chrome、真实文件、一次按键的整条路径）：
+
+| 内容 | `<span>` 方案（切令牌 + 重建 DOM） | `Range` + `::highlight()` |
+|---|---|---|
+| 26 KiB JS | 37 ms | 9 ms |
+| 64 KiB JS | 54 ms | 7 ms |
+| 128 KiB JS | 打字已明显掉帧，没再往大测 | 12 ms |
+| 256 KiB JS | —— | 27 ms |
+
+`<span>` 方案每次按键都要重建整篇高亮 DOM，26 KiB 就已经让打字明显掉帧；换成 Range 之后同样的
+内容只要几分之一，正文还是**一个文本节点**，与 textarea 的排版差异面也更小。
+
+四条边界（代码里都有对应注释）：
+
+1. **体量上限**：超过 256 KiB 字符或 2 万令牌就不上色（正文照旧显示与编辑），状态挂在
+   `[data-workspace-editor-highlight]` 上（`on` / `plain` / `over-limit` / `unsupported`）。
+2. **能力探测必须走 `globalThis.CSS`**：本模块自己有一个 `const CSS`（组件那张样式表），它会遮蔽
+   全局的 `CSS` 命名空间 —— 直接写 `CSS.highlights` 拿到的是那个字符串的 undefined 属性，能力探测
+   永远判成「不支持」。真踩过：整块高亮静默不上色。
+3. **只增删自己那 9 个高亮名，绝不 `CSS.highlights.clear()`**：那是全局注册表，别的插件（搜索高亮
+   之类）也在用。
+4. **同一时刻所有实例的高亮由一张模块级表统一重建**：`::highlight(...)` 的名字必须写死在样式表里，
+   没法给每个实例一套名字，所以任何实例的正文变了就把全部实例的 Range 一起重贴 —— 不这么做，
+   并排开两个编辑器时后渲染的那个会把前一个的高亮整个删掉（实测就是这样）。
+
+另外：`Range` 只能建在**文本节点**上，而调用方手里是高亮层元素（所以要取 `firstChild`）。直接拿
+元素当边界节点会按「子节点下标」解释 offset，越界抛 `IndexSizeError`，而 layout effect 里抛错会让
+React 卸载整棵子树 —— 编辑器白屏（探针抓到的真 bug）。上色那一步因此还包了 try/catch：
+**上色出问题最多是不上色，正文不能不见**。
+
 ## 四条实现约束（改代码前先读）
 
 1. **`index.js` 只 import `node:` 内置模块。** 插件包以 `link:` 装进 profile，模块真实路径在
@@ -361,6 +408,12 @@ event 开放，不跨插件边界；而公开面只有 `insertText`。所以 `@�
 > 加删除按钮与「文件编辑」面板时跑过**一次性探针**（桩 ctx + 真 `node:fs`/真临时目录；迷你 React
 > 运行时驱动删除按钮与整棵树的状态机），累计 60+ 条断言全绿，跑完即删 —— 它们是排查手段，不是
 > 常驻测试：常驻下来就得跟着 Hand-rolled React 与官方桩一起腐烂，与本节的取舍冲突。
+>
+> 语法高亮同样跑过一次性探针：高亮层那段是**纯函数**（切令牌），用 `/* highlight:start */` /
+> `/* highlight:end */` 两个标记整段截出来就能在 Node 里断言「令牌首尾相接还原正文」；几何部分
+> 则用**无头 Chrome + 真 React** 把真 `client.js` 挂起来量（高亮层与 textarea 的镜像逐字符比坐标、
+> 顶部与底部各比一次、wrap 开 / 关各一遍）。探针抓到过两个真 bug：能力探测被自己的 `const CSS`
+> 遮蔽、`Range` 边界传了元素节点（后者会让编辑器白屏）。
 
 ## 明确不做的事
 
@@ -376,7 +429,10 @@ event 开放，不跨插件边界；而公开面只有 `insertText`。所以 `@�
 | 多选 / 批量操作 | 需要一套选择模型与批量确认，收益还没到；一次一个目标更不容易误伤 |
 | 在面板里重命名已打开的编辑器页签 | 页签归属方是侧边栏的 store，插件没有公开入口去改别人的记录；从面板再点一次即可 |
 | 递归新建中间目录（`mkdir -p`） | 一次一层更可预期；要建多级就分几次点 |
-| 语法高亮 / 行号 / 查找替换 | 官方代码预览已经更好，编辑器不重复造 |
+| 行号 / 查找替换 / 多文件 | 官方代码预览已经更好，编辑器不重复造 |
+| 给高亮上「精确」的语言解析（shiki / vscode-textmate） | 精确解析每次按键都要重跑整篇，代价换不来打字体验；按后缀的近似规则表够用 |
+| 高亮层用 `<span>` 包令牌 | 每次按键重建整篇高亮 DOM，26 KiB 就 37 ms；Custom Highlight API 只要 9 ms（见「语法高亮」一节） |
+| 高亮「全部语言」 | 只做常见的十几档（JS/TS、JSON、HTML 系、CSS 系、Markdown、YAML、INI 系、Python、Shell 系、SQL、diff、C 家族近似）；认不出的后缀按纯文本，比硬套关键字表更不容易误导 |
 | 持久化草稿到 localStorage | 目的是「重挂活下来」，不是「跨会话恢复」；持久化要引入清理与配额问题 |
 | 分片上传大文件 | 一次请求一份内容更简单，超限就明确拒绝 |
 
@@ -386,7 +442,7 @@ event 开放，不跨插件边界；而公开面只有 `insertText`。所以 `@�
 |---|---|
 | [README.md](README.md) | 用法：安装、怎么进编辑器、线上协议、排错、怎么验证、已知边界 |
 | [index.js](index.js) | Host 半边全部实现（五条路由、三道闸、版本闸、`node:fs` 的 errno 映射） |
-| [client.js](client.js) | 浏览器半边全部实现（三档入口、`EditorSurface`、草稿与冲突、删除按钮、文件编辑面板） |
+| [client.js](client.js) | 浏览器半边全部实现（三档入口、`EditorSurface`、草稿与冲突、删除按钮、文件编辑面板、语法高亮层与令牌表） |
 | [cordis.patch.yml](cordis.patch.yml) | profile 里的插入行 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client` |
 | [AGENTS.md](AGENTS.md) | 给代理的速查：命令、约束清单、改动连带项 |

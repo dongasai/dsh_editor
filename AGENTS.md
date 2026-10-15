@@ -44,7 +44,7 @@
 | 文件 | 作用 |
 |---|---|
 | [index.js](index.js) | Host 半边全部实现：五条路由共用外壳 + 三道闸 + 版本闸 + `node:fs` 的 errno 映射 |
-| [client.js](client.js) | 浏览器半边全部实现：三档入口 + `EditorSurface` + 删除按钮 + 「文件编辑」文件树面板 + 右键「发送到 DSH」 |
+| [client.js](client.js) | 浏览器半边全部实现：三档入口 + `EditorSurface` + 语法高亮层与令牌表 + 删除按钮 + 「文件编辑」文件树面板 + 右键「发送到 DSH」 |
 | [cordis.patch.yml](cordis.patch.yml) | 插进 profile 的那一行 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client`（`platform` / `immediately` / `inject`） |
 | [locale/zh.json](locale/zh.json) / [locale/en.json](locale/en.json) | 插件列表里的标题与描述 |
@@ -66,7 +66,12 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
 `EDITOR_TAB_PATTERN` / 模块级 `drafts` / `inputTargets` / `CSS`）→ 文案 `zh` / `en` → 地址与纯工具
 （`addressParts` / `parseSessionFileAddress` / `absoluteFileAddress` / `fileNameOf` / `paneTarget` /
 `relativizeToCwd` / `lineNumberOf` / `lineReferenceToken` / `menuAnchorFor` / `sessionCwd` /
-`writeClipboard` / `readClipboard`）→ `InputSink`（`conversation.input.dock` 哨兵）→
+`writeClipboard` / `readClipboard`）→ **语法高亮区**（`/* highlight:start */` …
+`/* highlight:end */`：上限常量 / 高亮名映射 / 关键字表 / 各语言规则表 / `keywordSource` /
+`clikeRules` / `makeScanner` / `scannerFor` / `languageOfPath` / `normalizeNewlines` /
+`needsTrailingLine` / `highlightRegistry` / `highlightSupported` / `tokenize`）→
+`HIGHLIGHT_API_SUPPORTED` + `applyHighlights` / `releaseHighlights` / `rebuildHighlights`（DOM 侧，
+Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵）→
 `createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` / `EditAction` / `DeleteAction`）
 → `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`）→ `inject` + `apply`（编辑 / 删除按钮注册在
 同一个槽位，id 与 order 各一档；「文件编辑」是页签类型 + `sidebar.right.pane.tab` 正文 + 快捷键
@@ -133,7 +138,17 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
     `captureInsertion()` 与 `insertText()` 必须挨着调用 —— 中间任何编辑都会让版本 CAS 失败、
     插入被静默拒绝。引用文本只用 `lineReferenceToken()` 拼，自己拼字符串必然绕不开
     引号 / 空白 / 控制字符的边界（官方 grammar 表示不了的就是 `null`，别硬塞）。
-18. **别假设槽位标准 prop 都在；也别往 `h(...)` 的子元素里多打一个 `)`** —— 这两条各造成过
+18. **高亮层与 textarea 必须逐字逐行重合**：字体 / 内边距 / 换行规则放在**同一条 CSS 规则**里
+    （`.dsh-we-editor,.dsh-we-hl`）；宽度按 `textarea.clientWidth` 贴（滚动条会改变内容宽度）、
+    滚动位置每轮渲染后贴一次并在 `onScroll` 里直接贴；**正文结尾是换行或正文为空时要补一个
+    `<br>`**（textarea 给结尾空行留行盒，块级文本不给）。上色走 Custom Highlight API：高亮层里
+    **只有一个文本节点**，一个 span 都不加；`Range` 只能建在文本节点上（传元素会按子节点下标解释
+    offset → `IndexSizeError` → layout effect 抛错 → React 卸载整棵子树 → 白屏，真踩过）；
+    能力探测走 `globalThis.CSS`（本模块的 `const CSS` 会遮蔽全局命名空间）；只增删自己那 9 个高亮名，
+    **绝不 `CSS.highlights.clear()`**（全局注册表，别的插件也在用）；同屏多个实例的高亮由
+    `highlightSources` 统一重建（高亮名必须写死在样式表里，没法按实例命名）。
+
+19. **别假设槽位标准 prop 都在；也别往 `h(...)` 的子元素里多打一个 `)`** —— 这两条各造成过
     一次编辑器白屏，代价很大，务必记住：
     - **slot catalog 列的是类型并集，某个渲染点可能只传子集**：`sidebar.right.tab.document`
       的正文实际拿不到 `useSessions`，渲染期直接调用它的后果是 `TypeError` → React 卸载整棵
@@ -168,6 +183,11 @@ node --check index.js
 node --check client.js
 ```
 
+动了高亮：把 `/* highlight:start */` … `/* highlight:end */` 之间那段**纯函数**整段截出来，在 Node
+里断言「令牌首尾相接逐字还原正文」（`tokenize` 的令牌文本拼起来必须等于 LF 归一后的正文）与类别
+归属；几何部分（高亮层与 textarea 逐字符坐标一致、wrap 开 / 关、滚到底部）只能在浏览器里量 ——
+用真 React 把真 `client.js` 挂到无头 Chrome 里，拿 textarea 的镜像逐点比坐标。
+
 命令行能覆盖的注册断言（`cordis_inspect_list` → `cordis_inspect_query`：Host `Config.listConfigs`
 查 Loader 行，Client `Slots.listSubTree` 查槽位占用；外加无认证 POST 被拒、`GET` 得 405）与
 浏览器侧的手工清单都在 README「怎么验证」里，两处都要走一遍；**动了 `client.js` 的交互就必须在
@@ -191,7 +211,8 @@ node --check client.js
   同步同文件的「「文件编辑」面板：浏览器侧的设计」。
 - 动 Host 侧的闸 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「一次保存的完整路径」
   （五条路由那张图）、「删除 / 改名 / 建目录 / 复制为什么走 `node:fs`」与「四条实现约束」。
-- 已知边界（1 MiB 编辑上限、没有高亮 / 行号 / 多文件、页签顶替而非就地切换、官方文件树仍只读、
+- 已知边界（1 MiB 编辑上限、高亮 256 KiB / 2 万令牌上限与 Custom Highlight API 前提、没有行号 /
+  查找替换 / 多文件、页签顶替而非就地切换、官方文件树仍只读、
   删除永久且带毫秒级窗口、面板不做多选 / 不复制目录 / 不递归建中间目录、改名的预检窗口、递归
   删除只盖直接条目、`link:` 下 Host 半边要重启、草稿只在内存里、发送的是纯文本引用而非芯片、
   发送目标恒为当前会话、右键菜单替代原生文本框菜单、插入不聚焦输入框）写在 README 末尾；

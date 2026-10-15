@@ -54,7 +54,7 @@
  *
  * **为什么不只信槽位 prop**：slot catalog 列的是**类型并集**，某个渲染点可能只传了子集。
  * `sidebar.right.tab.document` 的正文就拿不到 `useSessions`，而正文里直接调用它的后果是
- * `TypeError` → React 卸载整棵子树 → **编辑器整块白屏**（真踩过，见 AGENTS.md 约束 18）。
+ * `TypeError` → React 卸载整棵子树 → **编辑器整块白屏**（真踩过，见 AGENTS.md 约束 19）。
  * 所以工作区根也不走 prop：从 `ctx.sessions.list.getSnapshot()` 在事件里现读（比渲染期的
  * prop 还新），读不到就退回绝对路径 —— 少一个相对化，绝不让整块正文挂掉。
  *
@@ -66,6 +66,23 @@
  *
  * 拿不到写入面（会话还没起来、对话区没打开、或输入框正被审批 / 问答占用）或插入被拒
  * （正在提交、草稿刚变过）时，只在编辑器里亮一条横幅说明，不静默失败。
+ *
+ * ## 语法高亮：一层等宽文本 + Custom Highlight API
+ *
+ * 可编辑正文是 `<textarea>`，颜色只有一条稳的路：**底下铺一层等宽文本**（高亮层），textarea 的
+ * 字设为透明（只留光标与选区），看得见的字形全来自高亮层。两层必须逐字逐行重合，所以排版样式
+ * 写在同一组 CSS 规则里、宽度与滚动每轮渲染后贴一次、正文结尾是换行（或正文为空）时高亮层补一个
+ * `<br>`（textarea 给结尾空行留行盒，块级文本不给）。
+ *
+ * 上色**不用 `<span>` 包令牌**，而是 `Range` + `::highlight()`：高亮层里只有一个文本节点，
+ * 一个 DOM 节点都不加。`<span>` 方案每次按键都要重建整篇高亮 DOM（实测 26 KiB 就要 37 ms，
+ * 打字明显掉帧），换成 Range 之后同样内容只要 9 ms。语言按**后缀**选一套近似规则表（十几档，
+ * 见 `LANGUAGE_BY_EXTENSION`），认不出的后缀、超过 256 KiB 字符 / 2 万令牌、或浏览器没有
+ * Custom Highlight API 时按纯文本显示 —— 状态挂在 `data-workspace-editor-highlight` 上。
+ *
+ * 高亮那一段是**纯函数**（夹在 `highlight:start` 与 `highlight:end` 两个标记之间），不碰 React 与
+ * DOM，可以整段截出来单独跑；Range 与注册表的胶水在它下面。来龙去脉与实测数据见
+ * [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「语法高亮」一节。
  */
 
 window.__ModuleLoader__.load({
@@ -173,8 +190,21 @@ window.__ModuleLoader__.load({
 .dsh-we-banner[data-tone="success"]{color:var(--dsw-alias-state-success-primary)}
 .dsh-we-banner-text{flex:1 1 auto;white-space:normal;overflow-wrap:anywhere}
 .dsh-we-detail{color:var(--dsw-alias-label-secondary)}
-.dsh-we-editor{flex:1 1 auto;min-height:0;width:100%;box-sizing:border-box;margin:0;padding:8px 10px;border:none;outline:none;resize:none;background:transparent;color:inherit;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:inherit;line-height:1.6;tab-size:2;white-space:pre;overflow:auto}
-.dsh-we-editor[data-wrap="true"]{white-space:pre-wrap;overflow-wrap:anywhere}
+.dsh-we-code{position:relative;flex:1 1 auto;min-height:0;overflow:hidden}
+.dsh-we-editor,.dsh-we-hl{box-sizing:border-box;margin:0;padding:8px 10px;border:none;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:inherit;line-height:1.6;tab-size:2;white-space:pre}
+.dsh-we-hl{position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;pointer-events:none;user-select:none;color:var(--shiki-foreground,var(--dsw-alias-label-primary))}
+.dsh-we-editor{position:absolute;top:0;left:0;width:100%;height:100%;outline:none;resize:none;background:transparent;color:transparent;-webkit-text-fill-color:transparent;caret-color:var(--dsw-alias-label-primary);overflow:auto}
+.dsh-we-editor::selection{background:color-mix(in srgb,var(--dsw-alias-state-business-primary,var(--dsw-alias-brand-primary)) 30%,transparent)}
+.dsh-we-editor[data-wrap="true"],.dsh-we-code[data-wrap="true"] .dsh-we-hl{white-space:pre-wrap;overflow-wrap:anywhere}
+::highlight(dsh-we-com){color:var(--shiki-token-comment,var(--dsw-alias-label-tertiary))}
+::highlight(dsh-we-str){color:var(--shiki-token-string,var(--dsw-alias-label-primary))}
+::highlight(dsh-we-exp){color:var(--shiki-token-string-expression,var(--shiki-token-string,var(--dsw-alias-label-primary)))}
+::highlight(dsh-we-num){color:var(--shiki-token-constant,var(--dsw-alias-label-primary))}
+::highlight(dsh-we-kw){color:var(--shiki-token-keyword,var(--dsw-alias-label-primary))}
+::highlight(dsh-we-fn){color:var(--shiki-token-function,var(--dsw-alias-label-primary))}
+::highlight(dsh-we-var){color:var(--shiki-token-parameter,var(--dsw-alias-label-primary))}
+::highlight(dsh-we-pun){color:var(--shiki-token-punctuation,var(--dsw-alias-label-secondary))}
+::highlight(dsh-we-lnk){color:var(--shiki-token-link,var(--dsw-alias-brand-primary))}
 .dsh-we-message{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:12px;padding:16px 20px;text-align:center;color:var(--dsw-alias-label-secondary);line-height:1.6;white-space:normal}
 .dsh-we-message-text{margin:0;overflow-wrap:anywhere}
 .dsh-wef-root{display:flex;flex-direction:column;flex:auto;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:1.5}
@@ -685,6 +715,595 @@ window.__ModuleLoader__.load({
       }, paths.map((d) => h('path', { key: d, d })))
     }
 
+    /* highlight:start —— 语法高亮。这一段是纯函数（不碰 React / DOM），调试脚本按这两个标记截出来单独跑。 */
+
+    /**
+     * 高亮上限（UTF-16 码元）：超过就整篇按纯文本画。
+     *
+     * 上色走 Custom Highlight API（`::highlight()`），一个 DOM 节点都不加，成本只有
+     * 「切令牌 + 建 Range」两项；实测（无头 Chrome，真实文件）256 KiB 一档约 25 ms 一次，
+     * 再往上打字就会掉帧。宁可大文件不上色（内容照样能编辑、能存），也不换一个
+     * 「打字时全篇变灰、停手才上色」的体验 —— 那种方案每次按键都要整篇闪一下。
+     */
+    const HIGHLIGHT_MAX_CHARS = 256 * 1024
+
+    /**
+     * 令牌数上限：Range 是一个一个建出来的，十万级令牌光分配就够呛。
+     * 与字符上限一起判，谁先超谁负责（`data-workspace-editor-highlight` 都是 `over-limit`）。
+     */
+    const HIGHLIGHT_MAX_TOKENS = 20000
+
+    /**
+     * 令牌类别 → `CSS.highlights` 注册名（同时是 `::highlight()` 里的名字）。
+     * 名字带插件前缀，只增删自己这几个 —— 绝不 `CSS.highlights.clear()`，
+     * 那会把别的插件（比如搜索高亮）注册的条目一起删掉。
+     */
+    const HIGHLIGHT_NAME_BY_TYPE = {
+      com: 'dsh-we-com',
+      exp: 'dsh-we-exp',
+      fn: 'dsh-we-fn',
+      kw: 'dsh-we-kw',
+      lnk: 'dsh-we-lnk',
+      num: 'dsh-we-num',
+      pun: 'dsh-we-pun',
+      str: 'dsh-we-str',
+      var: 'dsh-we-var',
+    }
+
+    /** 本插件会注册 / 删除的全部高亮名。 */
+    const HIGHLIGHT_NAMES = Object.values(HIGHLIGHT_NAME_BY_TYPE)
+
+    /** 数字（十进制 / 十六进制 / 二进制 / 八进制，含下划线分隔与常见后缀）。 */
+    const RE_NUMBER = /(?:0[xX][\da-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d+)?)[uUlLfFn]*/u
+
+    /** 双引号字符串（不跨行，`\\.` 吃掉转义）。 */
+    const RE_STRING_DQ = /"(?:[^"\\\n]|\\.)*"/u
+
+    /** 单引号字符串。 */
+    const RE_STRING_SQ = /'(?:[^'\\\n]|\\.)*'/u
+
+    /** 一段连续的标点 / 运算符（按段上色，避免一个括号一个 span）。 */
+    const RE_PUNCT = /[-{}\[\]();,.:?!+*\/%&|^<>=~]+/u
+
+    /**
+     * C 风格块注释（可跨行）。
+     *
+     * 用「不吃星的线性写法」而不是惰性 `[\s\S]*?`：后者在一篇到处是注释开头的病态文本里
+     * 会退化成 O(n²)（每个起点都扫到文末），打字就卡死了。
+     */
+    const RE_COMMENT_BLOCK = /\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\//u
+
+    /** C 风格行注释。 */
+    const RE_COMMENT_SLASH = /\/\/[^\n]*/u
+
+    /** `#` 行注释。 */
+    const RE_COMMENT_HASH = /#[^\n]*/u
+
+    /** JS / TS 关键字（含常用 TS 类型词）。 */
+    const KEYWORDS_JS = [
+      'abstract', 'any', 'as', 'asserts', 'async', 'await', 'bigint', 'boolean', 'break', 'case',
+      'catch', 'class', 'const', 'continue', 'debugger', 'declare', 'default', 'delete', 'do',
+      'else', 'enum', 'export', 'extends', 'false', 'finally', 'for', 'from', 'function', 'get',
+      'if', 'implements', 'import', 'in', 'infer', 'instanceof', 'interface', 'is', 'keyof', 'let',
+      'namespace', 'never', 'new', 'null', 'number', 'object', 'of', 'out', 'override', 'package',
+      'private', 'protected', 'public', 'readonly', 'return', 'satisfies', 'set', 'static',
+      'string', 'super', 'switch', 'symbol', 'this', 'throw', 'true', 'try', 'type', 'typeof',
+      'undefined', 'unique', 'unknown', 'var', 'void', 'while', 'with', 'yield',
+    ]
+
+    /** C 家族（含 Java、C#、Kotlin、Swift、Scala、Dart、Proto 等）的关键字。 */
+    const KEYWORDS_C = [
+      'abstract', 'assert', 'auto', 'boolean', 'break', 'byte', 'case', 'catch', 'char', 'class',
+      'const', 'constexpr', 'continue', 'default', 'delete', 'do', 'double', 'else', 'enum',
+      'explicit', 'export', 'extends', 'extern', 'false', 'final', 'finally', 'float', 'for',
+      'friend', 'goto', 'if', 'implements', 'import', 'inline', 'instanceof', 'int', 'interface',
+      'internal', 'is', 'label', 'long', 'namespace', 'native', 'new', 'null', 'nullptr',
+      'operator', 'override', 'package', 'private', 'protected', 'public', 'readonly', 'record',
+      'register', 'return', 'sealed', 'short', 'signed', 'sizeof', 'static', 'strictfp', 'struct',
+      'super', 'switch', 'synchronized', 'template', 'this', 'throw', 'throws', 'transient', 'true',
+      'try', 'typedef', 'typename', 'typeof', 'union', 'unsigned', 'using', 'var', 'virtual',
+      'void', 'volatile', 'while',
+    ]
+
+    /** Go 关键字。 */
+    const KEYWORDS_GO = [
+      'break', 'case', 'chan', 'const', 'continue', 'default', 'defer', 'else', 'fallthrough',
+      'false', 'for', 'func', 'go', 'goto', 'if', 'import', 'interface', 'iota', 'map', 'nil',
+      'package', 'range', 'return', 'select', 'struct', 'switch', 'true', 'type', 'var',
+    ]
+
+    /** Rust 关键字。 */
+    const KEYWORDS_RUST = [
+      'as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn', 'else', 'enum', 'extern',
+      'false', 'fn', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub',
+      'ref', 'return', 'self', 'Self', 'static', 'struct', 'super', 'trait', 'true', 'type',
+      'unsafe', 'use', 'where', 'while',
+    ]
+
+    /** Ruby / Perl 关键字（`#` 注释、`$var`、`:symbol` 也归这一档）。 */
+    const KEYWORDS_RUBY = [
+      'alias', 'and', 'begin', 'break', 'case', 'class', 'def', 'defined', 'do', 'else', 'elsif',
+      'end', 'ensure', 'false', 'for', 'if', 'in', 'module', 'next', 'nil', 'not', 'or', 'redo',
+      'rescue', 'retry', 'return', 'self', 'super', 'then', 'true', 'undef', 'unless', 'until',
+      'when', 'while', 'yield',
+    ]
+
+    /** Lua 关键字。 */
+    const KEYWORDS_LUA = [
+      'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function', 'goto', 'if', 'in',
+      'local', 'nil', 'not', 'or', 'repeat', 'return', 'then', 'true', 'until', 'while',
+    ]
+
+    /** Python 关键字。 */
+    const KEYWORDS_PY = [
+      'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue',
+      'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import',
+      'in', 'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while',
+      'with', 'yield',
+    ]
+
+    /** Shell 关键字。 */
+    const KEYWORDS_SH = [
+      'case', 'do', 'done', 'elif', 'else', 'esac', 'fi', 'for', 'function', 'if', 'in', 'local',
+      'return', 'select', 'then', 'time', 'until', 'while',
+    ]
+
+    /** SQL 关键字。 */
+    const KEYWORDS_SQL = [
+      'add', 'all', 'alter', 'and', 'any', 'as', 'asc', 'begin', 'between', 'by', 'case', 'cast',
+      'check', 'column', 'commit', 'constraint', 'create', 'cross', 'database', 'default', 'delete',
+      'desc', 'distinct', 'drop', 'else', 'end', 'except', 'exists', 'false', 'foreign', 'from',
+      'full', 'group', 'having', 'if', 'in', 'index', 'inner', 'insert', 'intersect', 'into', 'is',
+      'join', 'key', 'left', 'like', 'limit', 'not', 'null', 'offset', 'on', 'or', 'order', 'outer',
+      'primary', 'references', 'right', 'rollback', 'select', 'set', 'table', 'then', 'true',
+      'union', 'unique', 'update', 'values', 'view', 'when', 'where', 'with',
+    ]
+
+    /**
+     * 把关键字表拼成一条规则源码：长词在前，免得 `in` 先把 `instanceof` 咬掉。
+     * @param words - 关键字表。
+     * @param foldCase - true 时把每个字母展开成 `[sS]`（SQL 关键字大小写不敏感；拼出来的
+     *   规则仍然跑在 `gu` 扫描器里 —— 扫描器只有一面旗，不能给单条规则加 `i`）。
+     * @returns 带词边界的非捕获组源码。
+     */
+    function keywordSource(words, foldCase) {
+      const parts = [...words].sort((a, b) => b.length - a.length)
+      const body = parts.map((word) => (foldCase === true ? foldWordCase(word) : word)).join('|')
+      return `(?:${body})\\b`
+    }
+
+    /**
+     * 把一个词展开成大小写不敏感的正则片段（`select` → `[sS][eE][lL][eE][cC][tT]`）。
+     * @param word - 原词。
+     * @returns 正则片段。
+     */
+    function foldWordCase(word) {
+      return word.replace(/[A-Za-z]/gu, (ch) => (ch === ch.toLowerCase() ? `[${ch}${ch.toUpperCase()}]` : `[${ch}${ch.toLowerCase()}]`))
+    }
+
+    /**
+     * 大括号家族（JS / TS / C / Java / Go / Rust …）的规则表。
+     *
+     * 规则顺序即优先级：同一位置靠前的规则先匹配（注释与字符串必须先于标点）。
+     * @param keywords - 这门语言的关键字表。
+     * @param extra - 追加在字符串之后的语言专属规则（如 Rust 的生命周期）。
+     * @returns `[类别, 正则]` 规则表。
+     */
+    function clikeRules(keywords, extra) {
+      return [
+        ['com', RE_COMMENT_BLOCK],
+        ['com', RE_COMMENT_SLASH],
+        ['str', /`(?:[^`\\]|\\.)*`/u],
+        ['str', RE_STRING_DQ],
+        ['str', RE_STRING_SQ],
+        ['num', RE_NUMBER],
+        ...(extra ?? []),
+        ['fn', /@[\w$.]+/u],
+        ['kw', new RegExp(keywordSource(keywords), 'u')],
+        ['fn', /[A-Za-z_$][\w$]*(?=\s*\()/u],
+        ['var', /[A-Za-z_$][\w$]*(?=\s*[:=])/u],
+        ['pun', RE_PUNCT],
+      ]
+    }
+
+    /** JSON / JSONC / JSON5：键与值分开上色。 */
+    const RULES_JSON = [
+      ['com', RE_COMMENT_SLASH],
+      ['com', RE_COMMENT_BLOCK],
+      ['var', /"(?:[^"\\\n]|\\.)*"(?=\s*:)/u],
+      ['str', RE_STRING_DQ],
+      ['str', RE_STRING_SQ],
+      ['num', /\b(?:true|false|null)\b/u],
+      ['num', RE_NUMBER],
+      ['pun', RE_PUNCT],
+    ]
+
+    /** HTML / XML / Vue / Svelte：标签、属性、属性值。 */
+    const RULES_HTML = [
+      ['com', /<!--[\s\S]*?-->/u],
+      ['kw', /<![A-Za-z][^>]*>/u],
+      ['kw', /<\/?[A-Za-z][\w:.-]*/u],
+      ['var', /[\w:.-]+(?=\s*=)/u],
+      ['str', RE_STRING_DQ],
+      ['str', RE_STRING_SQ],
+      ['num', /&#?\w+;/u],
+      ['pun', RE_PUNCT],
+    ]
+
+    /** CSS / SCSS / LESS：at 规则、属性名、颜色与尺寸。 */
+    const RULES_CSS = [
+      ['com', RE_COMMENT_BLOCK],
+      ['str', RE_STRING_DQ],
+      ['str', RE_STRING_SQ],
+      ['kw', /@[\w-]+/u],
+      ['kw', /!(?:important|default)\b/u],
+      ['var', /--[\w-]+/u],
+      ['num', /#[0-9a-fA-F]{3,8}\b/u],
+      ['num', /\b\d[\d.]*(?:[a-z%]{0,8})?/u],
+      ['fn', /[\w-]+(?=\s*:)/u],
+      ['pun', RE_PUNCT],
+    ]
+
+    /** Markdown：标题、围栏、行内代码、链接、加粗。 */
+    const RULES_MARKDOWN = [
+      ['com', /<!--[\s\S]*?-->/u],
+      ['str', /`[^`\n]*`/u],
+      ['lnk', /!?\[[^\]\n]*\]\([^)\n]*\)/u],
+      ['lnk', /<https?:\/\/[^>\s]*>/u],
+      ['kw', /```[^\n]*/u],
+      ['fn', /\*\*[^\n]+?\*\*/u],
+      ['kw', /#{1,6}[^\n]*/u],
+    ]
+
+    /** YAML：键、注释、锚点、布尔与数字。 */
+    const RULES_YAML = [
+      ['com', RE_COMMENT_HASH],
+      ['str', RE_STRING_DQ],
+      ['str', RE_STRING_SQ],
+      ['kw', /-{3,}|\.{3}/u],
+      ['var', /[&*][\w-]+/u],
+      ['var', /!!?[\w:./-]+/u],
+      ['num', /\b(?:true|false|null|yes|no|on|off|True|False|Null)\b|~/u],
+      ['num', RE_NUMBER],
+      ['fn', /(?:^|\n)[ \t]*-?[ \t]*[\w$./-]+(?=\s*:)/u],
+      ['pun', /[{}\[\],:|>-]+/u],
+    ]
+
+    /** INI / TOML / .env / properties / *.conf：小节、键、注释。 */
+    const RULES_INI = [
+      ['com', /[;#][^\n]*/u],
+      ['kw', /\[[^\]\n]*\]/u],
+      ['str', RE_STRING_DQ],
+      ['str', RE_STRING_SQ],
+      ['num', /\b(?:true|false|yes|no|on|off)\b/u],
+      ['num', RE_NUMBER],
+      ['fn', /(?:^|\n)[ \t]*[\w.$-]+(?=\s*[=:])/u],
+      ['pun', /[,=.]+/u],
+    ]
+
+    /** Python：`#` 注释、三引号字符串、装饰器。 */
+    const RULES_PY = [
+      ['com', RE_COMMENT_HASH],
+      ['str', /(?:[rRbBuUfF]{0,2})?"""[\s\S]*?"""/u],
+      ['str', /(?:[rRbBuUfF]{0,2})?'''[\s\S]*?'''/u],
+      ['str', /(?:[rRbBuUfF]{0,2})?"(?:[^"\\\n]|\\.)*"/u],
+      ['str', /(?:[rRbBuUfF]{0,2})?'(?:[^'\\\n]|\\.)*'/u],
+      ['fn', /@[\w.]+/u],
+      ['num', RE_NUMBER],
+      ['kw', new RegExp(keywordSource(KEYWORDS_PY), 'u')],
+      ['fn', /[A-Za-z_]\w*(?=\s*\()/u],
+      ['pun', RE_PUNCT],
+    ]
+
+    /** Shell / PowerShell / 批处理：`#` 注释、变量、开关。 */
+    const RULES_SH = [
+      ['com', RE_COMMENT_HASH],
+      ['str', RE_STRING_SQ],
+      ['str', /"(?:[^"\\$\n]|\\.)*"/u],
+      ['var', /\$(?:\{[^}\n]*\}|[\w@*#?$!-]+)/u],
+      ['kw', new RegExp(keywordSource(KEYWORDS_SH), 'u')],
+      ['num', RE_NUMBER],
+      ['var', /(?:^|\s)--?[A-Za-z][\w-]*/u],
+      ['pun', RE_PUNCT],
+    ]
+
+    /** SQL：`--` 注释、单引号字符串、大小写不敏感的关键字。 */
+    const RULES_SQL = [
+      ['com', /--[^\n]*/u],
+      ['com', RE_COMMENT_BLOCK],
+      ['str', /'(?:[^']|'')*'/u],
+      ['str', RE_STRING_DQ],
+      ['num', RE_NUMBER],
+      ['kw', new RegExp(keywordSource(KEYWORDS_SQL, true), 'u')],
+      ['pun', RE_PUNCT],
+    ]
+
+    /** 补丁 / 差异：`+` 行、`-` 行、块头与文件头。 */
+    const RULES_DIFF = [
+      ['com', /(?:^|\n)(?:diff|index|new file|deleted file|similarity index|rename (?:from|to)|old mode|new mode)[^\n]*/u],
+      ['com', /(?:^|\n)(?:\+\+\+|---)[^\n]*/u],
+      ['var', /(?:^|\n)@@[^\n]*/u],
+      ['str', /(?:^|\n)\+[^\n]*/u],
+      ['kw', /(?:^|\n)-[^\n]*/u],
+    ]
+
+    /**
+     * 扩展名 → 语言 id。与官方 `languageForPath` 一样**只看后缀**：无后缀、认不出来的后缀
+     * 一律按纯文本画（`Dockerfile`、`Makefile` 这类没有后缀的名字不上色）。
+     */
+    const LANGUAGE_BY_EXTENSION = new Map(Object.entries({
+      js: 'js', mjs: 'js', cjs: 'js', jsx: 'js',
+      ts: 'ts', mts: 'ts', cts: 'ts', tsx: 'ts',
+      json: 'json', jsonc: 'json', json5: 'json', jsonl: 'json', ndjson: 'json',
+      html: 'html', htm: 'html', xhtml: 'html', xml: 'html', xsl: 'html', xslt: 'html',
+      svg: 'html', vue: 'html', svelte: 'html', astro: 'html',
+      css: 'css', scss: 'css', sass: 'css', less: 'css',
+      md: 'markdown', markdown: 'markdown', mdx: 'markdown',
+      yaml: 'yaml', yml: 'yaml',
+      ini: 'ini', cfg: 'ini', conf: 'ini', config: 'ini', env: 'ini', properties: 'ini',
+      toml: 'ini', lock: 'ini',
+      py: 'python', pyi: 'python', pyw: 'python',
+      sh: 'shell', bash: 'shell', zsh: 'shell', fish: 'shell', ksh: 'shell',
+      ps1: 'shell', psm1: 'shell', bat: 'shell', cmd: 'shell',
+      sql: 'sql',
+      diff: 'diff', patch: 'diff',
+      c: 'c', h: 'c', cc: 'c', cpp: 'c', cxx: 'c', hpp: 'c', hh: 'c', hxx: 'c', m: 'c', mm: 'c',
+      java: 'c', kt: 'c', kts: 'c', scala: 'c', swift: 'c', cs: 'c', dart: 'c', php: 'php',
+      proto: 'c', graphql: 'c', gql: 'c', hs: 'c', clj: 'c', cljs: 'c', nim: 'c', zig: 'c',
+      v: 'c', asm: 'c', s: 'c', gradle: 'c', groovy: 'c', cmake: 'c', mk: 'c', tex: 'c',
+      go: 'go',
+      rs: 'rust',
+      rb: 'ruby', rake: 'ruby', gemspec: 'ruby', pl: 'ruby', pm: 'ruby', r: 'ruby', jl: 'ruby',
+      ex: 'ruby', exs: 'ruby', erl: 'ruby', hrl: 'ruby',
+      lua: 'lua',
+    }))
+
+    /** clike 家族的语言 id → 关键字表。 */
+    const CLIKE_KEYWORDS = {
+      c: KEYWORDS_C,
+      go: KEYWORDS_GO,
+      js: KEYWORDS_JS,
+      lua: KEYWORDS_LUA,
+      php: KEYWORDS_C,
+      ruby: KEYWORDS_RUBY,
+      rust: KEYWORDS_RUST,
+      ts: KEYWORDS_JS,
+    }
+
+    /** 语言专属的补充规则。 */
+    const CLIKE_EXTRA = {
+      php: [
+        ['var', /\$[A-Za-z_]\w*/u],
+        ['com', RE_COMMENT_HASH],
+      ],
+      rust: [['exp', /'[A-Za-z_]\w*/u]],
+    }
+
+    /** 语言 id → 规则表（`clike` 家族按关键字表现拼）。 */
+    const RULES_BY_LANGUAGE = {
+      css: RULES_CSS,
+      diff: RULES_DIFF,
+      html: RULES_HTML,
+      ini: RULES_INI,
+      json: RULES_JSON,
+      markdown: RULES_MARKDOWN,
+      python: RULES_PY,
+      shell: RULES_SH,
+      sql: RULES_SQL,
+      yaml: RULES_YAML,
+    }
+
+    /** 语言 id → 扫描函数（惰性编译：一门语言第一次用到时才把它拼成正则）。 */
+    const scanners = new Map()
+
+    /**
+     * 路径 → 语言 id。只看后缀（与官方 `languageForPath` 同一套规则）；`.` 开头的文件
+     * 仍以第一个 `.` 为分隔，于是 `.env` 是 `env` → ini。
+     * @param path - 文件路径（绝对或相对都行）。
+     * @returns 语言 id，或 null（纯文本）。
+     */
+    function languageOfPath(path) {
+      if (typeof path !== 'string' || path === '') return null
+      const name = path.replace(/\\/gu, '/').split('/').pop() ?? ''
+      const dot = name.lastIndexOf('.')
+      if (dot === -1) return null
+      return LANGUAGE_BY_EXTENSION.get(name.slice(dot + 1).toLowerCase()) ?? null
+    }
+
+    /**
+     * 正文归一成 LF：textarea 的 value 本来就把 CRLF 归一成 LF，高亮层必须跟着归一，
+     * 否则 CRLF 文件里两层会差一个不可见字符。
+     * @param text - 原始正文。
+     * @returns 归一后的正文。
+     */
+    function normalizeNewlines(text) {
+      return text.replace(/\r\n?/gu, '\n')
+    }
+
+    /**
+     * 高亮层要不要在末尾补一个 `<br>`。
+     *
+     * textarea 会给「最后一个换行之后的那个空行」留一行高度，而块级文本里**结尾的换行
+     * 不产生行盒** —— 不补这一下，高亮层就比 textarea 少一行，滚到底部时两层错开一行。
+     * 空正文同理（空 textarea 也占一行高）。
+     * @param source - 已归一成 LF 的正文。
+     * @returns 是否需要补行盒。
+     */
+    function needsTrailingLine(source) {
+      return source === '' || source.endsWith('\n')
+    }
+
+    /**
+     * Custom Highlight 的注册表（全局 `CSS.highlights`）。
+     *
+     * **必须走 `globalThis`**：本模块自己有一个 `const CSS`（组件那张样式表），它会遮蔽
+     * 全局的 `CSS` 命名空间 —— 直接写 `CSS.highlights` 拿到的是那个字符串的 undefined 属性，
+     * 于是能力探测永远判成「不支持」（真踩过：整块高亮静默不上色，还查了半天）。
+     * @returns 注册表，或 undefined（浏览器不支持）。
+     */
+    function highlightRegistry() {
+      const namespace = globalThis.CSS
+      return namespace === undefined || namespace === null ? undefined : namespace.highlights
+    }
+
+    /** 浏览器是否支持 Custom Highlight API（Chrome 105+ / Safari 17.2+ / Firefox 140+）。 */
+    function highlightSupported() {
+      return typeof Highlight === 'function' && highlightRegistry() !== undefined
+    }
+
+    /**
+     * 把规则表拼成一个扫描器：一条规则一个捕获组，`g` 扫描 + 最左优先，同位置靠前的规则赢。
+     * @param rules - `[类别, 正则]` 表；正则里**不许有捕获组**（只能写 `(?:…)`），否则组号会错位。
+     * @returns `(text) => [{ type, text }]`，未匹配到的部分 `type` 为 null。
+     */
+    function makeScanner(rules) {
+      const pattern = new RegExp(rules.map((rule) => `(${rule[1].source})`).join('|'), 'gu')
+      const types = rules.map((rule) => rule[0])
+      return (text) => {
+        const tokens = []
+        let last = 0
+        let match
+        pattern.lastIndex = 0
+        while ((match = pattern.exec(text)) !== null) {
+          if (match[0] === '') {
+            pattern.lastIndex += 1
+            continue
+          }
+          for (let index = 0; index < types.length; index += 1) {
+            if (match[index + 1] === undefined) continue
+            if (match.index > last) tokens.push({ type: null, text: text.slice(last, match.index) })
+            tokens.push({ type: types[index], text: match[0] })
+            last = match.index + match[0].length
+            break
+          }
+        }
+        if (last < text.length) tokens.push({ type: null, text: text.slice(last) })
+        return tokens
+      }
+    }
+
+    /**
+     * 取一门语言的扫描函数；认不出来的语言返回 null。
+     * @param language - 语言 id。
+     * @returns 扫描函数或 null。
+     */
+    function scannerFor(language) {
+      const cached = scanners.get(language)
+      if (cached !== undefined) return cached
+      const extra = CLIKE_EXTRA[language]
+      const clikeKeywords = CLIKE_KEYWORDS[language]
+      const rules = RULES_BY_LANGUAGE[language] ?? (clikeKeywords === undefined ? undefined : clikeRules(clikeKeywords, extra))
+      const scan = rules === undefined ? null : makeScanner(rules)
+      scanners.set(language, scan)
+      return scan
+    }
+
+    /**
+     * 把正文切成令牌。
+     *
+     * 认不出语言、正文为空、超过字符 / 令牌上限时返回 null —— 调用方按纯文本画
+     * （正文照旧显示，只是不上色）。
+     * @param text - 正文。
+     * @param language - 语言 id，或 null（纯文本）。
+     * @returns `[{ type, text }]`（`type` 为 null 表示这段不上色），或 null。
+     */
+    function tokenize(text, language) {
+      const source = normalizeNewlines(text)
+      if (language === null || source.length > HIGHLIGHT_MAX_CHARS) return null
+      if (source === '') return []
+      const scan = scannerFor(language)
+      if (scan === null) return null
+      const tokens = scan(source)
+      return tokens.length > HIGHLIGHT_MAX_TOKENS ? null : tokens
+    }
+
+    /* highlight:end */
+
+    /** 浏览器是否支持 Custom Highlight API；模块加载时判一次（能力不会中途变）。 */
+    const HIGHLIGHT_API_SUPPORTED = highlightSupported()
+
+    /**
+     * 活着的编辑器实例的高亮源：`实例 id → { node, tokens }`。
+     *
+     * 为什么要这张表：`CSS.highlights` 是**全局**注册表，而 `::highlight(...)` 的名字必须是
+     * 静态的（样式表里写死），没法给每个实例一套名字 —— 于是同一时刻所有实例的高亮由这里
+     * **统一重建**：任何实例的正文变了，就把全部实例的 Range 一起重贴。不这么做的话，并排开
+     * 两个编辑器时后渲染的那个会把前一个的高亮整个删掉（实测就是这样）。
+     * 实例数是个位数，重建的代价可以忽略。
+     */
+    const highlightSources = new Map()
+
+    /** 高亮源 id 的自增序号。 */
+    let highlightSourceSeq = 0
+
+    /**
+     * @returns 一个新的高亮源 id。
+     */
+    function nextHighlightSourceId() {
+      highlightSourceSeq += 1
+      return `we-hl-${String(highlightSourceSeq)}`
+    }
+
+    /**
+     * 登记 / 更新一个实例的高亮源，并重建全局高亮。
+     * @param id - 实例 id。
+     * @param node - 正文文本节点。
+     * @param tokens - 令牌表，或 null（不上色）。
+     * @returns 是否具备上色能力（false 表示这个浏览器没有 Custom Highlight API）。
+     */
+    function applyHighlights(id, scope, tokens) {
+      const registry = highlightRegistry()
+      if (registry === undefined) return false
+      // Range 只能建在**文本节点**上：传进来的是高亮层元素，取它的第一个子节点。
+      // （直接拿元素当边界节点会按「子节点下标」解释 offset，越界就 IndexSizeError，
+      // 而 layout effect 里抛错会让 React 卸载整棵子树 —— 编辑器白屏，真踩过。）
+      const first = scope === null ? null : scope.firstChild
+      const node = first !== null && first.nodeType === 3 ? first : null
+      highlightSources.set(id, { node: node, tokens: tokens })
+      rebuildHighlights(registry)
+      return true
+    }
+
+    /**
+     * 摘掉一个实例的高亮源并重建（卸载时调用，免得留下指向已卸载节点的 Range）。
+     * @param id - 实例 id。
+     * @returns 无。
+     */
+    function releaseHighlights(id) {
+      if (!highlightSources.delete(id)) return
+      const registry = highlightRegistry()
+      if (registry !== undefined) rebuildHighlights(registry)
+    }
+
+    /**
+     * 把所有实例的令牌重建成高亮（每个类别一个 `Highlight`，装该类别全部 Range）。
+     * @param registry - `CSS.highlights`。
+     * @returns 无。
+     */
+    function rebuildHighlights(registry) {
+      for (const name of HIGHLIGHT_NAMES) registry.delete(name)
+      const grouped = new Map()
+      for (const source of highlightSources.values()) {
+        if (source.tokens === null || source.node === null) continue
+        let offset = 0
+        for (const token of source.tokens) {
+          const end = offset + token.text.length
+          if (token.type !== null) {
+            const range = document.createRange()
+            range.setStart(source.node, offset)
+            range.setEnd(source.node, end)
+            const list = grouped.get(token.type)
+            if (list === undefined) grouped.set(token.type, [range])
+            else list.push(range)
+          }
+          offset = end
+        }
+      }
+      for (const [type, ranges] of grouped) {
+        registry.set(HIGHLIGHT_NAME_BY_TYPE[type], new Highlight(...ranges))
+      }
+    }
+
     /**
      * 「输入框哨兵」：渲染 `null`，唯一作用是把本会话的 `inputActions`（对话输入框的公开
      * 写入面）登记进模块级 `inputTargets`，供编辑器正文的「发送到 DSH」取用；卸载即删。
@@ -747,6 +1366,89 @@ window.__ModuleLoader__.load({
         const savingRef = React.useRef(false)
         /** 文本框元素：菜单里的剪切 / 复制 / 粘贴 / 全选都要对「右键时那一块区域」下手。 */
         const areaRef = React.useRef(null)
+        /** 高亮层元素（textarea 底下那层**可见**文字，textarea 自己的字是透明的）。 */
+        const hlRef = React.useRef(null)
+        /** 本实例在高亮源表里的 id（同屏多个编辑器时统一重建高亮，见 applyHighlights）。 */
+        const highlightId = React.useRef('')
+        if (highlightId.current === '') highlightId.current = nextHighlightSourceId()
+
+        /** 当前语言：按路径后缀判定，认不出来就是纯文本（高亮层退化成一层等宽文本）。 */
+        const language = React.useMemo(() => languageOfPath(path), [path])
+        /** 高亮层显示的正文：与 textarea 的 value 同一形态（LF 归一）。 */
+        const highlightText = React.useMemo(() => normalizeNewlines(draft), [draft])
+        /**
+         * 令牌表（Range 就按它建）。
+         *
+         * **同步算、不等**：高亮层就是可见文字，晚一帧上色等于「打字时整篇变灰、停手才上色」。
+         * 所以这里同步切令牌（纯函数，上限内很快），并且**任何异常都退回纯文本** ——
+         * 高亮炸了最多是不上色，绝不能让整块正文白掉。
+         */
+        const tokens = React.useMemo(() => {
+          if (!HIGHLIGHT_API_SUPPORTED) return null
+          try {
+            return tokenize(draft, language)
+          } catch {
+            return null
+          }
+        }, [draft, language])
+
+        /**
+         * 高亮层与 textarea 对齐（宽度 + 滚动位置）。
+         *
+         * 三件必须做的事：两层是各自独立滚动的，每轮渲染后都要重贴一次（下面的
+         * `useLayoutEffect` 故意不带依赖）；用户滚动不走 React，由 textarea 的 `onScroll`
+         * 直接调；宽度也要贴 —— textarea 冒出竖向滚动条时它的内容宽度会窄一截，
+         * 不贴就会出现两套换行点（错位）。
+         * @returns 无。
+         */
+        const syncHighlight = React.useCallback(() => {
+          const area = areaRef.current
+          const layer = hlRef.current
+          if (area === null || layer === null) return
+          const width = `${String(area.clientWidth)}px`
+          if (layer.style.width !== width) layer.style.width = width
+          layer.scrollTop = area.scrollTop
+          layer.scrollLeft = area.scrollLeft
+        }, [])
+
+        /**
+         * textarea 的 ref 有两个用处（组件内部的选区操作 + owner 的滚动位置记忆），而 owner
+         * 的回调必须**原样**接到元素上：包成一个每轮渲染都变的新函数，React 会每轮 detach /
+         * attach，attach 会把 scrollTop 重置回记录值 —— 打字时页面会往上跳。这里的
+         * `useCallback` 只依赖 `scrollportRef`，identity 与 owner 那个回调同步变化。
+         */
+        const attachArea = React.useCallback((node) => {
+          areaRef.current = node
+          if (typeof scrollportRef === 'function') scrollportRef(node)
+        }, [scrollportRef])
+
+        // 每轮渲染后贴一次：正文、换行开关、横幅出现都可能改变 textarea 的宽度或滚动位置。
+        React.useLayoutEffect(syncHighlight)
+
+        // 上色：令牌变了才重建 Range（高亮层不加任何 DOM 节点，这一步只碰 Range 与
+        // `CSS.highlights` 注册表；放在 layout effect 里是为了在绘制前生效，不闪一下无色）。
+        React.useLayoutEffect(() => {
+          try {
+            applyHighlights(highlightId.current, hlRef.current, tokens)
+          } catch {
+            // 上色出问题绝不能连累正文：摘掉自己那份高亮，正文照旧按纯文本显示。
+            releaseHighlights(highlightId.current)
+          }
+        }, [tokens])
+
+        // 卸载时把自己的高亮源摘掉（否则全局注册表里会留下一堆指向已卸载节点的 Range）。
+        React.useEffect(() => () => { releaseHighlights(highlightId.current) }, [])
+
+
+        // 面板被拖动、窗口缩放时 textarea 的宽度会变，而 React 不一定重渲染 —— 用
+        // ResizeObserver 补上（content-box：滚动条出现 / 消失也算内容尺寸变化）。
+        React.useEffect(() => {
+          const area = areaRef.current
+          if (area === null || typeof ResizeObserver !== 'function') return undefined
+          const observer = new ResizeObserver(() => { syncHighlight() })
+          observer.observe(area, { box: 'content-box' })
+          return () => { observer.disconnect() }
+        }, [syncHighlight])
 
         // 读盘：外部信号（渲染器模式的 revision）或本地重载按钮变化时重读。
         React.useEffect(() => {
@@ -1050,6 +1752,16 @@ window.__ModuleLoader__.load({
         }, extra?.icon === null ? null : glyph(extra?.icon ?? 'file', 14), label)
 
         const dirty = draft !== doc.text
+        /** 高亮层的状态（浏览器里可断言）：`plain` 认不出语言、`over-limit` 超过高亮上限。 */
+        /**
+         * 高亮层的状态（浏览器里可断言）：`plain` 认不出语言、`over-limit` 超过字符 / 令牌上限、
+         * `unsupported` 这个浏览器没有 Custom Highlight API。
+         */
+        const highlightTone = !HIGHLIGHT_API_SUPPORTED
+          ? 'unsupported'
+          : language === null
+            ? 'plain'
+            : tokens === null ? 'over-limit' : 'on'
         const statusTone = save.phase === 'saved' ? 'saved' : dirty ? 'dirty' : 'clean'
         const statusText = save.phase === 'saving'
           ? t('action.saving')
@@ -1156,10 +1868,26 @@ window.__ModuleLoader__.load({
             disabled: !dirty || save.phase === 'saving',
             onClick: () => { void saveNow(false) },
           }, t('action.save'))),
+        h('div', {
+          className: 'dsh-we-code',
+          'data-wrap': wrap ? 'true' : 'false',
+          'data-workspace-editor-language': language ?? '',
+        },
+        // 高亮层在**下**、textarea 在**上**：textarea 的字是透明的（只留光标与选区），
+        // 看得见的字形全部来自这一层。`aria-hidden` 免得读屏把正文念两遍。
+        h('pre', {
+          className: 'dsh-we-hl',
+          'aria-hidden': 'true',
+          'data-workspace-editor-highlight': highlightTone,
+          ref: hlRef,
+        },
+        // 正文就是**一个文本节点**：上色交给 Custom Highlight API（Range + `::highlight()`），
+        // 一个 span 都不加 —— 每次按键重建几千个 span 的代价实测会让打字掉帧（见 applyHighlights）。
+        // 末尾那个 `<br>` 是给 textarea 的「结尾空行」补行盒的（见 needsTrailingLine）。
+        highlightText,
+        needsTrailingLine(highlightText) ? h('br') : null),
         h('textarea', {
-          // 直接把 owner 的稳定回调当 ref：包一层会让 React 每次渲染都先 detach 再 attach，
-          // 而 attach 会把 scrollTop 重置回记录值 —— 打字时页面会往上跳。
-          ref: typeof scrollportRef === 'function' ? scrollportRef : null,
+          ref: attachArea,
           className: 'dsh-we-editor',
           'data-wrap': wrap ? 'true' : 'false',
           'data-workspace-editor-input': '',
@@ -1169,6 +1897,7 @@ window.__ModuleLoader__.load({
           spellCheck: false,
           autoCapitalize: 'off',
           autoCorrect: 'off',
+          onScroll: syncHighlight,
           onChange: (event) => {
             setDraft(event.target.value)
             setSave((prev) => (prev.phase === 'saving' ? prev : { phase: 'idle' }))
@@ -1193,7 +1922,7 @@ window.__ModuleLoader__.load({
             })
           },
           onKeyDown,
-        }),
+        })),
         menu !== null && h('div', {
           className: 'dsh-wef-backdrop',
           'data-workspace-editor-send-backdrop': '',
