@@ -237,12 +237,23 @@ route(ctx, req, res, endpoint)
 编辑器正文里**右键 →「发送到 DSH 输入框」**，把「当前文件 + 选区所在行」变成
 `@路径#L15` / `@路径#L15-20` 插进对话输入框。四个设计点：
 
-**1. 写入口袋：官方 `InputActions`，不是自己搭的桥。** DSH 给插件的公开写入面是槽位标准 prop
-`inputActions`（`conversation.input.*` 与侧栏文档 / 页签槽位都有）：`captureInsertion()` 拿
-「当前选区 + 草稿版本」的快照，`insertText(text, span)` 按这个快照 CAS 插入。这里**就近取用**
-—— 编辑器正文本来就活在会话作用域的槽位里，把自己的 `inputActions` 往下传即可；不需要另设一个
-「哨兵槽位」挂到 `conversation.input.dock` 上去记一份注册表。哨兵方案要多管一个模块级 Map 的
-生命周期，而输入框卸载 / 接管（审批、问答会整个换掉 composer）时它比 prop 更容易变成过期引用。
+**1. 写入口袋：官方 `InputActions`，两条路都试。** DSH 给插件的公开写入面是 `inputActions`：
+`captureInsertion()` 拿「当前选区 + 草稿版本」的快照，`insertText(text, span)` 按这个快照 CAS
+插入。它出现的位置有两处，本插件**都用**：编辑器自己槽位上的 prop（有就用，作用域最明确），
+以及 `conversation.input.dock` 上那个渲染 `null` 的**哨兵**登记进模块级 `inputTargets` 的那一份
+—— 官方语音输入、目标栏都在这个槽位拿它，所以它一定有。
+
+**为什么不只信槽位 prop（白屏教训）**：slot catalog 列的是**类型并集**，某个渲染点可能只传了
+子集。`sidebar.right.tab.document` 的正文实际拿不到 `useSessions`，而渲染期直接调用它的后果是
+`TypeError` → React 卸载整棵子树 → **编辑器整块白屏**。这次真踩了，所以工作区根也不走 prop：
+改成在事件里从 `ctx.sessions.list.getSnapshot()` 现读（比渲染期的 prop 还新），读不到就退回绝对
+路径 —— 少一个相对化，绝不让整块正文挂掉。
+
+**追加子元素时别把括号提前闭合（第二个白屏）**：往 `return h('div', {...}, 子元素…)` 的尾部追加
+内容时，多打一个 `)` 会把整段变成**逗号表达式** —— `return h(...), menu && h(...)` 的返回值是
+最后一个 `&&`（菜单关着就是 `false`），React 渲染 `false` 等于什么都不画：**白屏、控制台没有
+任何报错**。`node --check` 只验语法，这种语义错误它看不见；要用 acorn 确认那个 `return` 仍是
+`CallExpression` 才算数。两条教训都固化在 AGENTS.md 约束 18。
 
 **2. 纯文本而不是芯片。** 带结构化引用的插入（`slash/input-insert-reference`）只对内通过 scoped
 event 开放，不跨插件边界；而公开面只有 `insertText`。所以 `@路径#L行号` 以普通字符落进输入框，

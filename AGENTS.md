@@ -63,13 +63,14 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
 `resolveSessionRoot` → `readBody` → `sendFailure` → 若干纯工具函数。
 
 `client.js` 内部顺序：常量（`WRITE_URL` / `DELETE_URL` / 两个扩展名表 / 三个 id /
-`EDITOR_TAB_PATTERN` / 模块级 `drafts` / `CSS`）→ 文案 `zh` / `en` → 地址与纯工具（`addressParts` /
-`parseSessionFileAddress` / `absoluteFileAddress` / `fileNameOf` / `paneTarget` /
-`relativizeToCwd` / `lineNumberOf` / `lineReferenceToken` / `menuAnchorFor` / `writeClipboard` /
-`readClipboard`）→ `createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` /
-`EditAction` / `DeleteAction`）→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`）→
-`inject` + `apply`（编辑 / 删除按钮注册在同一个槽位，id 与 order 各一档；「文件编辑」是页签类型 +
-`sidebar.right.pane.tab` 正文 + 快捷键）。
+`EDITOR_TAB_PATTERN` / 模块级 `drafts` / `inputTargets` / `CSS`）→ 文案 `zh` / `en` → 地址与纯工具
+（`addressParts` / `parseSessionFileAddress` / `absoluteFileAddress` / `fileNameOf` / `paneTarget` /
+`relativizeToCwd` / `lineNumberOf` / `lineReferenceToken` / `menuAnchorFor` / `sessionCwd` /
+`writeClipboard` / `readClipboard`）→ `InputSink`（`conversation.input.dock` 哨兵）→
+`createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` / `EditAction` / `DeleteAction`）
+→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`）→ `inject` + `apply`（编辑 / 删除按钮注册在
+同一个槽位，id 与 order 各一档；「文件编辑」是页签类型 + `sidebar.right.pane.tab` 正文 + 快捷键
++ 输入框哨兵）。
 
 ## 硬性约束（违反即出 bug，别试探）
 
@@ -132,6 +133,17 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
     `captureInsertion()` 与 `insertText()` 必须挨着调用 —— 中间任何编辑都会让版本 CAS 失败、
     插入被静默拒绝。引用文本只用 `lineReferenceToken()` 拼，自己拼字符串必然绕不开
     引号 / 空白 / 控制字符的边界（官方 grammar 表示不了的就是 `null`，别硬塞）。
+18. **别假设槽位标准 prop 都在；也别往 `h(...)` 的子元素里多打一个 `)`** —— 这两条各造成过
+    一次编辑器白屏，代价很大，务必记住：
+    - **slot catalog 列的是类型并集，某个渲染点可能只传子集**：`sidebar.right.tab.document`
+      的正文实际拿不到 `useSessions`，渲染期直接调用它的后果是 `TypeError` → React 卸载整棵
+      子树。要用某个 prop 之前先做守卫，或改从 ctx 服务现读 —— 工作区根走
+      `ctx.sessions.list.getSnapshot()`（事件里现读，比渲染期 prop 还新）；输入框写入面走
+      **「槽位 prop 优先 + `conversation.input.dock` 哨兵登记（`inputTargets`）兜底」**两条路。
+    - **`return h('div', {...}, 子元素…)` 尾部追加元素时，多一个 `)` 会让整段变成逗号表达式**：
+      `return h(...), menu && h(...)` 的返回值是最后那个 `&&`（菜单关着就是 `false`），
+      React 渲染 `false` = 什么都不画 —— **白屏且控制台没有报错**。`node --check` 只验语法，
+      这种语义错误它看不见：改完用 `node -e` + acorn 确认那个 `return` 仍是 `CallExpression`。
 
 ## 代码风格
 

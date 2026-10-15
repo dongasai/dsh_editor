@@ -45,16 +45,26 @@
  * （`@A.html#L15` / `@A.html#L15-20`，工作区内的路径按相对路径写）插进**这个会话的**
  * 对话输入框，位置就是输入框里光标上次所在处。
  *
+ * 写入面的来源有两条，**两条都不假设侧栏槽位实际传了什么 prop**：
+ *
+ * 1. **就近的槽位 prop**：渲染点给了 `inputActions` 就直接用（作用域最明确）。
+ * 2. **哨兵注册表兜底**：「文件编辑」之外，本插件还在 `conversation.input.dock` 注册了一个
+ *    渲染 `null` 的哨兵 —— 挂载时把该会话的 `inputActions` 记进模块级 `inputTargets`，
+ *    卸载即删。那是官方自己（语音输入、目标栏）在用的位置，这个面一定有。
+ *
+ * **为什么不只信槽位 prop**：slot catalog 列的是**类型并集**，某个渲染点可能只传了子集。
+ * `sidebar.right.tab.document` 的正文就拿不到 `useSessions`，而正文里直接调用它的后果是
+ * `TypeError` → React 卸载整棵子树 → **编辑器整块白屏**（真踩过，见 AGENTS.md 约束 18）。
+ * 所以工作区根也不走 prop：从 `ctx.sessions.list.getSnapshot()` 在事件里现读（比渲染期的
+ * prop 还新），读不到就退回绝对路径 —— 少一个相对化，绝不让整块正文挂掉。
+ *
  * 插进去的是**普通文本而不是芯片**：官方公开面 `InputActions` 只有
  * `insertText(text, span)`，没有带结构化引用的插入（带引用的那条路只对内通过
  * scoped event 开放）；`#L` 行号语法交给模型侧解析，与 Harness 系统提示里规定的
  * `@…#L` 引用写法一致。**尾随空格是刻意的** —— `@` 触发检测要求触发 token 紧贴光标，
  * 空格让刚插进去的引用不会又把 `@` 文件菜单唤出来。
  *
- * 写入面的来源：`conversation.input.*` 与侧栏文档 / 页签槽位的标准 prop 里都带
- * `inputActions`（每个会话一份的稳定 facade）。这里**就近取用** —— 编辑器正文本来就
- * 活在会话作用域的槽位里，把自己的 `inputActions` 传进来即可，不另设哨兵槽位去别处
- * 记一份。拿不到这个面（会话还没起来、或输入框正被审批 / 问答占用）或插入被拒
+ * 拿不到写入面（会话还没起来、对话区没打开、或输入框正被审批 / 问答占用）或插入被拒
  * （正在提交、草稿刚变过）时，只在编辑器里亮一条横幅说明，不静默失败。
  */
 
@@ -125,6 +135,13 @@ window.__ModuleLoader__.load({
 
     /** 未保存草稿，按 `会话 + 路径` 索引；切标签 / 关页签都会重挂正文，草稿要活过重挂。 */
     const drafts = new Map()
+
+    /**
+     * 对话输入框的写入面，按会话索引：`conversation.input.dock` 的哨兵挂载时登记、卸载即删。
+     * 编辑器「发送到 DSH」优先用自己槽位上的 `inputActions` prop，prop 没有（侧栏某些渲染点
+     * 不传标准 prop，见文件头注释）时从这里取。
+     */
+    const inputTargets = new Map()
 
     /** 组件本地样式：随组件挂载渲染、卸载即消失，只用主题令牌。 */
     const CSS = `
@@ -565,6 +582,25 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 读一个会话的工作区根。
+     *
+     * 走 `ctx.sessions` 服务快照、在**事件里现读**，而不是渲染期从槽位取 `useSessions`
+     * prop —— 侧栏某些渲染点不传这个标准 prop，正文里调用它会让整块正文白屏（真踩过）。
+     * 服务不在、会话行还没到、cwd 是空串，都只是「拿不到」：引用退回绝对路径。
+     * @param ctx - 客户端根上下文。
+     * @param sessionId - 会话 id。
+     * @returns 工作区根，或 undefined。
+     */
+    function sessionCwd(ctx, sessionId) {
+      try {
+        const cwd = ctx.sessions?.list?.getSnapshot?.()?.byId?.[sessionId]?.cwd
+        return typeof cwd === 'string' && cwd !== '' ? cwd : undefined
+      } catch {
+        return undefined
+      }
+    }
+
+    /**
      * 写剪贴板：优先 async clipboard API；非安全上下文（用局域网 IP 的 http 打开页面）
      * 或旧浏览器没有它，回落到一次性的 textarea + `execCommand('copy')`。
      * @param text - 要写入的文本。
@@ -650,6 +686,34 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 「输入框哨兵」：渲染 `null`，唯一作用是把本会话的 `inputActions`（对话输入框的公开
+     * 写入面）登记进模块级 `inputTargets`，供编辑器正文的「发送到 DSH」取用；卸载即删。
+     *
+     * 为什么不让编辑器正文只从自己的槽位 prop 拿：侧栏槽位的渲染点**不保证**传全那套标准
+     * prop —— `sidebar.right.tab.document` 的正文连 `useSessions` 都没有，正文里直接调用
+     * 会让整块白屏（真踩过）。`conversation.input.*` 是官方自己（语音输入、目标栏）在用的
+     * 位置，`inputActions` 一定在；两处都拿不到时发送只亮横幅，不影响正文。
+     *
+     * 删除时先比对象：同一会话重挂（换布局 / 换会话）时新哨兵可能已经登记，晚到的旧
+     * cleanup 不能把新的那份删掉。
+     * @param props - `conversation.input.dock` 交来的 props（`sessionId` 与 `inputActions`；
+     *   会话 id 缺失时退回 owner 的 `session.sessionId`）。
+     * @returns null。
+     */
+    function InputSink(props) {
+      const { sessionId, inputActions, session } = props
+      const id = typeof sessionId === 'string' && sessionId !== '' ? sessionId : session?.sessionId
+      React.useEffect(() => {
+        if (typeof id !== 'string' || id === '' || inputActions === undefined) return undefined
+        inputTargets.set(id, inputActions)
+        return () => {
+          if (inputTargets.get(id) === inputActions) inputTargets.delete(id)
+        }
+      }, [id, inputActions])
+      return null
+    }
+
+    /**
      * 造出本插件的三个组件（闭包持有客户端上下文，Remote 读接口在这里取）。
      * @param ctx - 客户端根上下文。
      * @returns 文档渲染器正文、页签正文、预览头部的「编辑」按钮。
@@ -657,11 +721,11 @@ window.__ModuleLoader__.load({
     function createEditor(ctx) {
       /**
        * 共用的可编辑正文：读盘、草稿、版本闸、冲突处理都在这里。
-       * @param props - `{ t, sessionId, path, wrap, onToggleWrap, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions, useSessions }`。
+       * @param props - `{ t, sessionId, path, wrap, onToggleWrap, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions }`。
        * @returns 编辑区、状态条与横幅。
        */
       function EditorSurface(props) {
-        const { t, sessionId, path, wrap, onToggleWrap, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions, useSessions } = props
+        const { t, sessionId, path, wrap, onToggleWrap, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions } = props
         const storageKey = `${sessionId}\u0000${path}`
         const [doc, setDoc] = React.useState({ phase: 'loading' })
         const [draft, setDraft] = React.useState('')
@@ -683,8 +747,6 @@ window.__ModuleLoader__.load({
         const savingRef = React.useRef(false)
         /** 文本框元素：菜单里的剪切 / 复制 / 粘贴 / 全选都要对「右键时那一块区域」下手。 */
         const areaRef = React.useRef(null)
-        /** 当前会话的工作区根：发送引用时把绝对路径改写成相对路径（DSH 的 `@` 惯例）。 */
-        const cwd = useSessions((state) => state.byId?.[sessionId]?.cwd)
 
         // 读盘：外部信号（渲染器模式的 revision）或本地重载按钮变化时重读。
         React.useEffect(() => {
@@ -906,7 +968,7 @@ window.__ModuleLoader__.load({
           const start = area.selectionStart ?? 0
           const end = area.selectionEnd ?? start
           const reference = lineReferenceToken(
-            relativizeToCwd(current.absolutePath ?? path, cwd),
+            relativizeToCwd(current.absolutePath ?? path, sessionCwd(ctx, sessionId)),
             lineNumberOf(draftRef.current, start),
             lineNumberOf(draftRef.current, end),
           )
@@ -914,9 +976,11 @@ window.__ModuleLoader__.load({
             setSend({ phase: 'failed', text: t('send.failed.path') })
             return
           }
-          const actions = inputActions
+          // 写入面：槽位 prop 优先（作用域最明确），没有就用哨兵登记的那份（官方的
+          // conversation.input.dock 一定有这个面 —— 侧栏某些渲染点不传标准 prop）。
+          const actions = inputActions ?? inputTargets.get(sessionId)
           if (actions === undefined || typeof actions.captureInsertion !== 'function' || typeof actions.insertText !== 'function') {
-            // 会话还没起来、或输入框正被审批 / 问答占用（composer 被接管）时没有这个面。
+            // 会话还没起来、对话区没打开、或输入框正被审批 / 问答占用（composer 被接管）。
             setSend({ phase: 'failed', text: t('send.failed.input') })
             return
           }
@@ -1122,14 +1186,14 @@ window.__ModuleLoader__.load({
               // 引用在右键那一刻就算好：点菜单不会动选区，但先算一次能让菜单项的
               // title 直接显示「将要插入什么」，发送时也不必再猜选区。
               token: lineReferenceToken(
-                relativizeToCwd(doc.absolutePath ?? path, cwd),
+                relativizeToCwd(doc.absolutePath ?? path, sessionCwd(ctx, sessionId)),
                 lineNumberOf(draft, start),
                 lineNumberOf(draft, end),
               ),
             })
           },
           onKeyDown,
-        })),
+        }),
         menu !== null && h('div', {
           className: 'dsh-wef-backdrop',
           'data-workspace-editor-send-backdrop': '',
@@ -1150,7 +1214,7 @@ window.__ModuleLoader__.load({
           icon: 'send',
           disabled: menu.token === null,
           title: menu.token === null ? t('send.failed.path') : t('send.menuTitle', { token: menu.token }),
-        }))
+        })))
       }
 
       /**
@@ -1160,7 +1224,7 @@ window.__ModuleLoader__.load({
        * @returns 编辑器正文，或地址不可用时的说明。
        */
       function DocumentBody(props) {
-        const { resourceAddress, content, wrap, scrollportRef, t, inputActions, useSessions } = props
+        const { resourceAddress, content, wrap, scrollportRef, t, inputActions } = props
         const request = content !== undefined && content !== null && content.kind === 'renderer' ? content : null
         const file = React.useMemo(() => parseSessionFileAddress(resourceAddress), [resourceAddress])
         if (file === null || request === null) {
@@ -1180,7 +1244,6 @@ window.__ModuleLoader__.load({
           onLoaded: (version) => { request.loaded(version) },
           onFailed: () => { request.failed() },
           inputActions,
-          useSessions,
         })
       }
 
@@ -1191,7 +1254,7 @@ window.__ModuleLoader__.load({
        * @returns 编辑器正文，或目标不可用时的说明。
        */
       function PaneBody(props) {
-        const { useTabInfo, sessionId, t, inputActions, useSessions } = props
+        const { useTabInfo, sessionId, t, inputActions } = props
         const { tab } = useTabInfo()
         const [wrap, setWrap] = React.useState(true)
         const target = React.useMemo(() => paneTarget(tab, sessionId), [tab, sessionId])
@@ -1211,7 +1274,6 @@ window.__ModuleLoader__.load({
           reloadKey: 'tab',
           variant: 'dsh-we-pane',
           inputActions,
-          useSessions,
         })
       }
 
@@ -2359,6 +2421,16 @@ window.__ModuleLoader__.load({
         key: FILES_TAB_ID,
         locale: NS,
       }, FilesPanel)), 'workspace-editor: files panel body')
+
+      // 对话输入框的「哨兵」：不画任何东西，只把本会话的 `inputActions` 登记进
+      // `inputTargets`，给编辑器正文的「发送到 DSH」兜底用（编辑器自己的槽位不保证传这个
+      // prop，见文件头注释与 InputSink 的注释）。
+      ctx.effect(() => ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
+        name: 'conversation.input.dock',
+        id: 'workspace-editor-input',
+        order: 90,
+        locale: NS,
+      }, InputSink)), 'workspace-editor: composer input sink')
 
       // 快捷键可选：`shortcuts` 服务不在也不影响面板（guide 卡片照样能打开它）。
       ctx.inject(['shortcuts'], (scoped) => {
