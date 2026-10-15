@@ -37,6 +37,25 @@
  * 另外（渲染器模式）：读盘后**总是**把读到的磁盘版本回报给 `content.loaded(version)`，
  * 即使缓冲区是脏的 —— 文档预览的 owner 用这个版本号判断「磁盘变了没有」，若回报旧版本，
  * 它的自动刷新会一直认为需要重读，形成重读循环。
+ *
+ * ## 把文件与行号发到对话输入框
+ *
+ * 编辑器正文的文本框上**右键**有一份菜单：除剪切 / 复制 / 粘贴 / 全选外，最后一项是
+ * **「发送到 DSH 输入框」** —— 它把「当前文件 + 选区所在行」拼成 DSH 的 `@` 引用
+ * （`@A.html#L15` / `@A.html#L15-20`，工作区内的路径按相对路径写）插进**这个会话的**
+ * 对话输入框，位置就是输入框里光标上次所在处。
+ *
+ * 插进去的是**普通文本而不是芯片**：官方公开面 `InputActions` 只有
+ * `insertText(text, span)`，没有带结构化引用的插入（带引用的那条路只对内通过
+ * scoped event 开放）；`#L` 行号语法交给模型侧解析，与 Harness 系统提示里规定的
+ * `@…#L` 引用写法一致。**尾随空格是刻意的** —— `@` 触发检测要求触发 token 紧贴光标，
+ * 空格让刚插进去的引用不会又把 `@` 文件菜单唤出来。
+ *
+ * 写入面的来源：`conversation.input.*` 与侧栏文档 / 页签槽位的标准 prop 里都带
+ * `inputActions`（每个会话一份的稳定 facade）。这里**就近取用** —— 编辑器正文本来就
+ * 活在会话作用域的槽位里，把自己的 `inputActions` 传进来即可，不另设哨兵槽位去别处
+ * 记一份。拿不到这个面（会话还没起来、或输入框正被审批 / 问答占用）或插入被拒
+ * （正在提交、草稿刚变过）时，只在编辑器里亮一条横幅说明，不静默失败。
  */
 
 window.__ModuleLoader__.load({
@@ -134,6 +153,7 @@ window.__ModuleLoader__.load({
 .dsh-we-banner{flex:none;display:flex;align-items:center;gap:10px;margin:0;padding:6px 10px;font-size:12px;background:var(--dsw-alias-bg-layer-2);border-bottom:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary)}
 .dsh-we-banner[data-tone="warn"]{color:var(--dsw-alias-state-warn-primary)}
 .dsh-we-banner[data-tone="error"]{color:var(--dsw-alias-state-error-primary)}
+.dsh-we-banner[data-tone="success"]{color:var(--dsw-alias-state-success-primary)}
 .dsh-we-banner-text{flex:1 1 auto;white-space:normal;overflow-wrap:anywhere}
 .dsh-we-detail{color:var(--dsw-alias-label-secondary)}
 .dsh-we-editor{flex:1 1 auto;min-height:0;width:100%;box-sizing:border-box;margin:0;padding:8px 10px;border:none;outline:none;resize:none;background:transparent;color:inherit;font-family:var(--dsw-font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace);font-size:inherit;line-height:1.6;tab-size:2;white-space:pre;overflow:auto}
@@ -257,6 +277,17 @@ window.__ModuleLoader__.load({
       'conflict.message': '磁盘上的文件已被改动（可能是模型或其它工具改的），直接保存会覆盖对方的修改。',
       'changed.message': '磁盘上的文件已被改动。你的未保存修改还留着，不会被覆盖。',
       'hint.save': 'Ctrl/Cmd+S 保存',
+      'action.cut': '剪切',
+      'action.copy': '复制',
+      'action.paste': '粘贴',
+      'action.selectAll': '全选',
+      'send.menu': '发送到 DSH 输入框',
+      'send.menuTitle': '把 {token} 插进对话输入框',
+      'send.sent': '已插入 {token}',
+      'send.failed.input': '现在没有可用的对话输入框（这个会话的对话区没打开，或正被审批 / 问答占用）。',
+      'send.failed.busy': '输入框正忙或内容刚变过，没有插入，再试一次。',
+      'send.failed.path': '这个文件的路径没法安全地表示成引用。',
+      'send.failed.clipboard': '浏览器不让写剪贴板，改用 Ctrl/Cmd+C 吧。',
     }
 
     const en = {
@@ -338,6 +369,17 @@ window.__ModuleLoader__.load({
       'conflict.message': 'The file changed on disk (the agent or another tool may have written it). Saving now would overwrite those changes.',
       'changed.message': 'The file changed on disk. Your unsaved text is kept and will not be overwritten.',
       'hint.save': 'Ctrl/Cmd+S to save',
+      'action.cut': 'Cut',
+      'action.copy': 'Copy',
+      'action.paste': 'Paste',
+      'action.selectAll': 'Select all',
+      'send.menu': 'Send to the DSH input',
+      'send.menuTitle': 'Insert {token} into the chat input',
+      'send.sent': 'Inserted {token}',
+      'send.failed.input': 'No chat input is available right now (this session\'s conversation area is closed, or an approval / question is holding the composer).',
+      'send.failed.busy': 'The input is busy or just changed; nothing was inserted. Try again.',
+      'send.failed.path': 'This file path cannot be represented as a reference safely.',
+      'send.failed.clipboard': 'The browser refused clipboard access; use Ctrl/Cmd+C instead.',
     }
 
     /**
@@ -459,6 +501,112 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 工作区内的绝对路径改写成相对路径（DSH 的 `@` 引用惯例：工作区内用相对路径，
+     * 工作区外用绝对路径；与官方 `relativizeToCwd` 同一套规则）。
+     * @param path - 绝对路径。
+     * @param cwd - 会话工作区根；缺失、或路径不在根下时原样返回。
+     * @returns 相对路径或原路径。
+     */
+    function relativizeToCwd(path, cwd) {
+      if (typeof cwd !== 'string' || cwd === '') return path
+      const root = cwd.replace(/[/\\]+$/u, '')
+      if (path.startsWith(`${root}/`) || path.startsWith(`${root}\\`)) return path.slice(root.length + 1)
+      return path
+    }
+
+    /**
+     * 文本里某个偏移所在的行号（1 起）。
+     * @param text - 全文。
+     * @param offset - 字符偏移。
+     * @returns 行号。
+     */
+    function lineNumberOf(text, offset) {
+      let line = 1
+      const limit = Math.min(Math.max(offset, 0), text.length)
+      for (let index = 0; index < limit; index += 1) {
+        if (text.charCodeAt(index) === 10) line += 1
+      }
+      return line
+    }
+
+    /**
+     * 拼一个「文件 + 行号」引用（DSH 的 `@` 语法）：`@A.html#L15`、`@A.html#L15-20`。
+     * 路径带空白时按官方 grammar 加引号（`@"a b.html"#L15`），与 `@` 选择器插进去的
+     * 芯片同一套写法，模型侧才认。
+     * @param path - 工作区相对路径或绝对路径。
+     * @param startLine - 起始行（1 起）。
+     * @param endLine - 结束行；与起始行相同则只写一个行号。
+     * @returns 引用文本；路径含控制字符或引号（官方 grammar 表示不了）时返回 null。
+     */
+    function lineReferenceToken(path, startLine, endLine) {
+      if (path === '') return null
+      if (startLine < 1 || endLine < startLine) return null
+      // 与官方 formatFileMention 同一条底线：这些字符进不了 grammar，别硬塞。
+      if (/[\u0000-\u001f\u007f-\u009f"]/u.test(path)) return null
+      const lines = endLine > startLine ? `#L${String(startLine)}-${String(endLine)}` : `#L${String(startLine)}`
+      return /\s/u.test(path) ? `@"${path}"${lines}` : `@${path}${lines}`
+    }
+
+    /**
+     * 菜单落点：右键取鼠标位置，按钮点击取按钮左下角；都按视口坐标（菜单是
+     * `position:fixed`）并对视口下边缘做一次收敛，免得菜单被切掉。两个菜单
+     * （文件树行的、编辑器正文的）共用这一份实现。
+     * @param event - 触发事件（`contextmenu` 或 `click`）。
+     * @returns `{ x, y }`。
+     */
+    function menuAnchorFor(event) {
+      const fromPointer = event.type === 'contextmenu' || (event.button ?? 0) === 2
+      const rect = fromPointer || typeof event.currentTarget?.getBoundingClientRect !== 'function'
+        ? null
+        : event.currentTarget.getBoundingClientRect()
+      const height = typeof window === 'undefined' ? 0 : window.innerHeight
+      const raw = rect === null ? { x: event.clientX ?? 0, y: event.clientY ?? 0 } : { x: rect.left, y: rect.bottom }
+      return { x: raw.x, y: height > 0 ? Math.min(raw.y, Math.max(0, height - 220)) : raw.y }
+    }
+
+    /**
+     * 写剪贴板：优先 async clipboard API；非安全上下文（用局域网 IP 的 http 打开页面）
+     * 或旧浏览器没有它，回落到一次性的 textarea + `execCommand('copy')`。
+     * @param text - 要写入的文本。
+     * @returns 是否写成功。
+     */
+    async function writeClipboard(text) {
+      try {
+        await navigator.clipboard.writeText(text)
+        return true
+      } catch {
+        // 没有 clipboard API（或权限被拒）：走下面的兜底。
+      }
+      try {
+        const area = document.createElement('textarea')
+        area.value = text
+        area.setAttribute('readonly', '')
+        area.style.position = 'fixed'
+        area.style.opacity = '0'
+        document.body.appendChild(area)
+        area.select()
+        const written = document.execCommand('copy')
+        area.remove()
+        return written
+      } catch {
+        return false
+      }
+    }
+
+    /**
+     * 读剪贴板：权限被拒或非安全上下文时返回 undefined，调用方静默跳过
+     * （键盘 Ctrl/Cmd+V 照样能用）。
+     * @returns 剪贴板文本，或 undefined。
+     */
+    async function readClipboard() {
+      try {
+        return await navigator.clipboard.readText()
+      } catch {
+        return undefined
+      }
+    }
+
+    /**
      * 内联 SVG 图标：这个 bundle 没有构建步骤、也不能 require 官方图标包（它不在 boot 图里），
      * 所以图标是几段写死的 path。颜色只吃 `currentColor`，跟着主题令牌走。
      */
@@ -475,6 +623,7 @@ window.__ModuleLoader__.load({
       refresh: ['M13 8a5 5 0 1 1-1.7-3.7', 'M13.3 2.6v3.2h-3.2'],
       open: ['M2.5 12.5V6h6.5l-2.4 2.4', 'M6.6 3.5h6v6'],
       more: ['M3.6 8h.01', 'M8 8h.01', 'M12.4 8h.01'],
+      send: ['M2.2 8h9.4', 'M8.4 4.4 11.8 8l-3.4 3.6'],
     }
 
     /**
@@ -508,11 +657,11 @@ window.__ModuleLoader__.load({
     function createEditor(ctx) {
       /**
        * 共用的可编辑正文：读盘、草稿、版本闸、冲突处理都在这里。
-       * @param props - `{ t, sessionId, path, wrap, onToggleWrap, scrollportRef, reloadKey, variant, onLoaded, onFailed }`。
+       * @param props - `{ t, sessionId, path, wrap, onToggleWrap, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions, useSessions }`。
        * @returns 编辑区、状态条与横幅。
        */
       function EditorSurface(props) {
-        const { t, sessionId, path, wrap, onToggleWrap, scrollportRef, reloadKey, variant, onLoaded, onFailed } = props
+        const { t, sessionId, path, wrap, onToggleWrap, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions, useSessions } = props
         const storageKey = `${sessionId}\u0000${path}`
         const [doc, setDoc] = React.useState({ phase: 'loading' })
         const [draft, setDraft] = React.useState('')
@@ -520,6 +669,10 @@ window.__ModuleLoader__.load({
         const [conflict, setConflict] = React.useState(null)
         const [changed, setChanged] = React.useState(false)
         const [token, setToken] = React.useState(0)
+        /** 右键菜单：`{ x, y, token }`；`token` 是右键那一刻算好的引用（ null 表示这文件没法表示成引用）。 */
+        const [menu, setMenu] = React.useState(null)
+        /** 「发送到 DSH」的结果：`sent` 亮一会儿，`failed` 留在横幅里等人处理。 */
+        const [send, setSend] = React.useState({ phase: 'idle' })
 
         const draftRef = React.useRef(draft)
         draftRef.current = draft
@@ -528,6 +681,10 @@ window.__ModuleLoader__.load({
         const dirtyRef = React.useRef(false)
         dirtyRef.current = doc.phase === 'ready' && draft !== doc.text
         const savingRef = React.useRef(false)
+        /** 文本框元素：菜单里的剪切 / 复制 / 粘贴 / 全选都要对「右键时那一块区域」下手。 */
+        const areaRef = React.useRef(null)
+        /** 当前会话的工作区根：发送引用时把绝对路径改写成相对路径（DSH 的 `@` 惯例）。 */
+        const cwd = useSessions((state) => state.byId?.[sessionId]?.cwd)
 
         // 读盘：外部信号（渲染器模式的 revision）或本地重载按钮变化时重读。
         React.useEffect(() => {
@@ -605,12 +762,15 @@ window.__ModuleLoader__.load({
           else drafts.delete(storageKey)
         }, [storageKey])
 
-        // 「已保存」提示只亮一会儿。
+        // 「已保存」「已插入」提示只亮一会儿。
         React.useEffect(() => {
-          if (save.phase !== 'saved') return undefined
-          const timer = setTimeout(() => { setSave({ phase: 'idle' }) }, 2500)
+          if (save.phase !== 'saved' && send.phase !== 'sent') return undefined
+          const timer = setTimeout(() => {
+            setSave((prev) => (prev.phase === 'saved' ? { phase: 'idle' } : prev))
+            setSend({ phase: 'idle' })
+          }, 2500)
           return () => { clearTimeout(timer) }
-        }, [save.phase])
+        }, [save.phase, send.phase])
 
         /**
          * 写盘：带版本闸；磁盘变过就进冲突横幅，等用户显式覆盖。
@@ -677,8 +837,104 @@ window.__ModuleLoader__.load({
           setToken((value) => value + 1)
         }
 
-        /** Ctrl/Cmd+S 保存。 */
+        /** 当前选区切片；没有选区时是空串。 */
+        const selectedText = () => {
+          const area = areaRef.current
+          if (area === null) return ''
+          return area.value.slice(area.selectionStart ?? 0, area.selectionEnd ?? 0)
+        }
+
+        /** 用一段文本换掉选区（菜单里的剪切 / 粘贴都走它），并同步 React 状态。 */
+        const replaceSelection = (text) => {
+          const area = areaRef.current
+          if (area === null) return
+          const start = area.selectionStart ?? 0
+          const end = area.selectionEnd ?? start
+          area.setRangeText(text, start, end, 'end')
+          area.focus()
+          setDraft(area.value)
+          setSave((prev) => (prev.phase === 'saving' ? prev : { phase: 'idle' }))
+        }
+
+        /** 剪切：先写剪贴板，写成功了才从缓冲区里删掉选区。 */
+        const cutSelection = async () => {
+          const text = selectedText()
+          if (text === '') return
+          if (!(await writeClipboard(text))) {
+            setSend({ phase: 'failed', text: t('send.failed.clipboard') })
+            return
+          }
+          replaceSelection('')
+        }
+
+        /** 复制：写剪贴板；浏览器不肯写时亮一条提示（Ctrl/Cmd+C 仍可用）。 */
+        const copySelection = async () => {
+          const text = selectedText()
+          if (text === '') return
+          if (!(await writeClipboard(text))) setSend({ phase: 'failed', text: t('send.failed.clipboard') })
+        }
+
+        /** 粘贴：读剪贴板插进选区；读不到（权限 / 非安全上下文）就静默跳过。 */
+        const pasteSelection = async () => {
+          const text = await readClipboard()
+          if (text === undefined || text === '') return
+          replaceSelection(text)
+        }
+
+        /** 全选：先把焦点收回文本框再 select，否则选区落在别处。 */
+        const selectAll = () => {
+          const area = areaRef.current
+          if (area === null) return
+          area.focus()
+          area.select()
+        }
+
+        /**
+         * 把「当前文件 + 选区所在行」拼成 `@` 引用，插进这个会话的对话输入框。
+         *
+         * 两处刻意：
+         * 1. **先 `captureInsertion()` 再 `insertText()`，两步挨着做** —— 公开面的插入是
+         *    「捕获时的选区 + 草稿版本」CAS，中间任何编辑都会让插入被拒（返回 false）。
+         * 2. **尾随空格** —— `@` 触发检测要求触发 token 紧贴光标，空格让刚插进去的引用
+         *    不会又把 `@` 文件菜单唤出来。
+         * @returns 无。
+         */
+        const sendToInput = () => {
+          const area = areaRef.current
+          const current = docRef.current
+          if (area === null || current.phase !== 'ready') return
+          const start = area.selectionStart ?? 0
+          const end = area.selectionEnd ?? start
+          const reference = lineReferenceToken(
+            relativizeToCwd(current.absolutePath ?? path, cwd),
+            lineNumberOf(draftRef.current, start),
+            lineNumberOf(draftRef.current, end),
+          )
+          if (reference === null) {
+            setSend({ phase: 'failed', text: t('send.failed.path') })
+            return
+          }
+          const actions = inputActions
+          if (actions === undefined || typeof actions.captureInsertion !== 'function' || typeof actions.insertText !== 'function') {
+            // 会话还没起来、或输入框正被审批 / 问答占用（composer 被接管）时没有这个面。
+            setSend({ phase: 'failed', text: t('send.failed.input') })
+            return
+          }
+          if (!actions.insertText(`${reference} `, actions.captureInsertion())) {
+            setSend({ phase: 'failed', text: t('send.failed.busy') })
+            return
+          }
+          setSave((prev) => (prev.phase === 'saved' ? { phase: 'idle' } : prev))
+          setSend({ phase: 'sent', text: t('send.sent', { token: reference }) })
+        }
+
+        /** Ctrl/Cmd+S 保存；菜单开着时 Esc 先关菜单。 */
         const onKeyDown = (event) => {
+          if (event.key === 'Escape' && menu !== null) {
+            event.preventDefault()
+            setMenu(null)
+            return
+          }
           if (event.key === 's' && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
             event.preventDefault()
             void saveNow(false)
@@ -704,6 +960,30 @@ window.__ModuleLoader__.load({
                 onClick: () => { setToken((value) => value + 1) },
               }, t('action.retry'))))
         }
+
+        /**
+         * 右键菜单里的一项。属性值带上禁用态与当前 token，方便浏览器里断言
+         * （`data-workspace-editor-*` 是调试锚点，不用 class 或可见文案当锚点）。
+         * @param id - 锚点后缀（同时当 key）。
+         * @param label - 可见文案。
+         * @param run - 点下去干什么。
+         * @param extra - `{ disabled, title, icon }`；`icon: null` 表示这一项不要图标。
+         * @returns 菜单项。
+         */
+        const sendMenuItem = (id, label, run, extra) => h('button', {
+          key: id,
+          type: 'button',
+          className: 'dsh-wef-menu-item',
+          disabled: extra?.disabled === true,
+          title: extra?.title,
+          'data-workspace-editor-send-item': id,
+          'data-disabled': extra?.disabled === true ? 'true' : 'false',
+          onClick: (event) => {
+            event.stopPropagation()
+            setMenu(null)
+            run()
+          },
+        }, extra?.icon === null ? null : glyph(extra?.icon ?? 'file', 14), label)
 
         const dirty = draft !== doc.text
         const statusTone = save.phase === 'saved' ? 'saved' : dirty ? 'dirty' : 'clean'
@@ -768,6 +1048,16 @@ window.__ModuleLoader__.load({
           'data-tone': 'error',
           'data-workspace-editor-save-error': '',
         }, h('span', { className: 'dsh-we-banner-text' }, save.message)),
+        send.phase === 'sent' && h('p', {
+          className: 'dsh-we-banner',
+          'data-tone': 'success',
+          'data-workspace-editor-send': 'sent',
+        }, h('span', { className: 'dsh-we-banner-text' }, send.text)),
+        send.phase === 'failed' && h('p', {
+          className: 'dsh-we-banner',
+          'data-tone': 'error',
+          'data-workspace-editor-send': 'failed',
+        }, h('span', { className: 'dsh-we-banner-text' }, send.text)),
         doc.notice != null && h('p', {
           className: 'dsh-we-banner',
           'data-tone': 'warn',
@@ -819,18 +1109,58 @@ window.__ModuleLoader__.load({
             setDraft(event.target.value)
             setSave((prev) => (prev.phase === 'saving' ? prev : { phase: 'idle' }))
           },
+          onContextMenu: (event) => {
+            // 右键菜单自己画：原生文本框菜单里没有「发送到 DSH」，而在原生菜单旁边
+            // 再挂一个浮层会出现两份菜单。剪切 / 复制 / 粘贴 / 全选照给，不损失原生
+            // 菜单本就有的编辑能力。
+            event.preventDefault()
+            areaRef.current = event.currentTarget
+            const start = event.currentTarget.selectionStart ?? 0
+            const end = event.currentTarget.selectionEnd ?? start
+            setMenu({
+              ...menuAnchorFor(event),
+              // 引用在右键那一刻就算好：点菜单不会动选区，但先算一次能让菜单项的
+              // title 直接显示「将要插入什么」，发送时也不必再猜选区。
+              token: lineReferenceToken(
+                relativizeToCwd(doc.absolutePath ?? path, cwd),
+                lineNumberOf(draft, start),
+                lineNumberOf(draft, end),
+              ),
+            })
+          },
           onKeyDown,
+        })),
+        menu !== null && h('div', {
+          className: 'dsh-wef-backdrop',
+          'data-workspace-editor-send-backdrop': '',
+          onClick: () => { setMenu(null) },
+          onContextMenu: (event) => { event.preventDefault(); setMenu(null) },
+        }),
+        menu !== null && h('div', {
+          className: 'dsh-wef-menu',
+          style: { left: `${String(menu.x)}px`, top: `${String(menu.y)}px` },
+          'data-workspace-editor-send-menu': menu.token ?? '',
+        },
+        sendMenuItem('cut', t('action.cut'), () => { void cutSelection() }, { icon: null }),
+        sendMenuItem('copy', t('action.copy'), () => { void copySelection() }, { icon: null }),
+        sendMenuItem('paste', t('action.paste'), () => { void pasteSelection() }, { icon: null }),
+        sendMenuItem('selectAll', t('action.selectAll'), selectAll, { icon: null }),
+        h('div', { className: 'dsh-wef-menu-sep', key: 'sep' }),
+        sendMenuItem('send', t('send.menu'), sendToInput, {
+          icon: 'send',
+          disabled: menu.token === null,
+          title: menu.token === null ? t('send.failed.path') : t('send.menuTitle', { token: menu.token }),
         }))
       }
 
       /**
        * 文档渲染器正文（入口 1 / 2）：从资源地址取出会话与路径，把 owner 的
        * `content.loaded/failed` 接上。
-       * @param props - 文档正文槽位交来的 props。
+       * @param props - 文档正文槽位交来的 props（含 `inputActions`：本会话输入框的公开写入面）。
        * @returns 编辑器正文，或地址不可用时的说明。
        */
       function DocumentBody(props) {
-        const { resourceAddress, content, wrap, scrollportRef, t } = props
+        const { resourceAddress, content, wrap, scrollportRef, t, inputActions, useSessions } = props
         const request = content !== undefined && content !== null && content.kind === 'renderer' ? content : null
         const file = React.useMemo(() => parseSessionFileAddress(resourceAddress), [resourceAddress])
         if (file === null || request === null) {
@@ -849,17 +1179,19 @@ window.__ModuleLoader__.load({
           variant: 'dsh-we-fill',
           onLoaded: (version) => { request.loaded(version) },
           onFailed: () => { request.failed() },
+          inputActions,
+          useSessions,
         })
       }
 
       /**
        * 编辑器页签正文（入口 3）：目标来自打开时带的 `navigation.params`，没有参数时
        * 回落到解析地址里的绝对路径。
-       * @param props - 页签正文槽位交来的 props。
+       * @param props - 页签正文槽位交来的 props（含 `inputActions`：本会话输入框的公开写入面）。
        * @returns 编辑器正文，或目标不可用时的说明。
        */
       function PaneBody(props) {
-        const { useTabInfo, sessionId, t } = props
+        const { useTabInfo, sessionId, t, inputActions, useSessions } = props
         const { tab } = useTabInfo()
         const [wrap, setWrap] = React.useState(true)
         const target = React.useMemo(() => paneTarget(tab, sessionId), [tab, sessionId])
@@ -878,6 +1210,8 @@ window.__ModuleLoader__.load({
           scrollportRef: null,
           reloadKey: 'tab',
           variant: 'dsh-we-pane',
+          inputActions,
+          useSessions,
         })
       }
 
@@ -1406,21 +1740,7 @@ window.__ModuleLoader__.load({
           event.stopPropagation()
           setSelected(path)
           setError(null)
-          setMenu({ path, type, ...menuAnchor(event) })
-        }
-
-        /**
-         * 菜单落点：鼠标位置（右键）或按钮左下角（⋯）。都按视口坐标，菜单是 `position:fixed`。
-         * @param event - 触发事件。
-         * @returns `{ x, y }`，并对视口下边缘做一次收敛，免得菜单被切掉。
-         */
-        const menuAnchor = (event) => {
-          const rect = typeof event.currentTarget?.getBoundingClientRect === 'function'
-            ? event.currentTarget.getBoundingClientRect()
-            : null
-          const height = typeof window === 'undefined' ? 0 : window.innerHeight
-          const raw = rect === null ? { x: event.clientX ?? 0, y: event.clientY ?? 0 } : { x: rect.left, y: rect.bottom }
-          return { x: raw.x, y: height > 0 ? Math.min(raw.y, Math.max(0, height - 220)) : raw.y }
+          setMenu({ path, type, ...menuAnchorFor(event) })
         }
 
         /** 打开「新建」输入行：目录要顺手展开，否则输入框没地方待。 */

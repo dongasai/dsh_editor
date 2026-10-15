@@ -44,7 +44,7 @@
 | 文件 | 作用 |
 |---|---|
 | [index.js](index.js) | Host 半边全部实现：五条路由共用外壳 + 三道闸 + 版本闸 + `node:fs` 的 errno 映射 |
-| [client.js](client.js) | 浏览器半边全部实现：三档入口 + `EditorSurface` + 删除按钮 + 「文件编辑」文件树面板 |
+| [client.js](client.js) | 浏览器半边全部实现：三档入口 + `EditorSurface` + 删除按钮 + 「文件编辑」文件树面板 + 右键「发送到 DSH」 |
 | [cordis.patch.yml](cordis.patch.yml) | 插进 profile 的那一行 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client`（`platform` / `immediately` / `inject`） |
 | [locale/zh.json](locale/zh.json) / [locale/en.json](locale/en.json) | 插件列表里的标题与描述 |
@@ -63,11 +63,13 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
 `resolveSessionRoot` → `readBody` → `sendFailure` → 若干纯工具函数。
 
 `client.js` 内部顺序：常量（`WRITE_URL` / `DELETE_URL` / 两个扩展名表 / 三个 id /
-`EDITOR_TAB_PATTERN` / 模块级 `drafts` / `CSS`）→ 文案 `zh` / `en` → 地址工具（`addressParts` /
-`parseSessionFileAddress` / `absoluteFileAddress` / `fileNameOf` / `paneTarget`）→
-`createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` / `EditAction` / `DeleteAction`）
-→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`）→ `inject` + `apply`（编辑 / 删除按钮注册在
-同一个槽位，id 与 order 各一档；「文件编辑」是页签类型 + `sidebar.right.pane.tab` 正文 + 快捷键）。
+`EDITOR_TAB_PATTERN` / 模块级 `drafts` / `CSS`）→ 文案 `zh` / `en` → 地址与纯工具（`addressParts` /
+`parseSessionFileAddress` / `absoluteFileAddress` / `fileNameOf` / `paneTarget` /
+`relativizeToCwd` / `lineNumberOf` / `lineReferenceToken` / `menuAnchorFor` / `writeClipboard` /
+`readClipboard`）→ `createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` /
+`EditAction` / `DeleteAction`）→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`）→
+`inject` + `apply`（编辑 / 删除按钮注册在同一个槽位，id 与 order 各一档；「文件编辑」是页签类型 +
+`sidebar.right.pane.tab` 正文 + 快捷键）。
 
 ## 硬性约束（违反即出 bug，别试探）
 
@@ -125,6 +127,11 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
     工具条按钮、F2 全部调同一个 `startRename()` —— 不要再写第二份改名逻辑。新增行操作时照这个
     形状加（`menuItem()` 一处声明、各处复用），并记得**常显入口**：只有悬停才出现的按钮等于
     没有按钮（用户反馈过一次「tree 缺重命名」）。
+17. **「发送到 DSH」的两个细节不要「顺手优化」掉**：插进输入框的引用**必须带尾随空格** ——
+    否则 `@` 触发检测会认为用户正在输引用、把 `@` 文件菜单唤出来，用户得手动 Esc；
+    `captureInsertion()` 与 `insertText()` 必须挨着调用 —— 中间任何编辑都会让版本 CAS 失败、
+    插入被静默拒绝。引用文本只用 `lineReferenceToken()` 拼，自己拼字符串必然绕不开
+    引号 / 空白 / 控制字符的边界（官方 grammar 表示不了的就是 `null`，别硬塞）。
 
 ## 代码风格
 
@@ -174,7 +181,12 @@ node --check client.js
   （五条路由那张图）、「删除 / 改名 / 建目录 / 复制为什么走 `node:fs`」与「四条实现约束」。
 - 已知边界（1 MiB 编辑上限、没有高亮 / 行号 / 多文件、页签顶替而非就地切换、官方文件树仍只读、
   删除永久且带毫秒级窗口、面板不做多选 / 不复制目录 / 不递归建中间目录、改名的预检窗口、递归
-  删除只盖直接条目、`link:` 下 Host 半边要重启、草稿只在内存里）写在 README 末尾；
+  删除只盖直接条目、`link:` 下 Host 半边要重启、草稿只在内存里、发送的是纯文本引用而非芯片、
+  发送目标恒为当前会话、右键菜单替代原生文本框菜单、插入不聚焦输入框）写在 README 末尾；
   **没真正解决之前不要从文档里删掉**。
 - **文档分工别混**：README 只回答「怎么用」（用户视角的问题进排错表 / 已知边界），
   IMPLEMENTATION 只回答「为什么」；别让 README 重新长出实现细节。
+
+
+## 其他事项
+- 修改提交后记得push
