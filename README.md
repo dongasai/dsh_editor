@@ -58,6 +58,8 @@ dsh plugin --profile web add git+https://github.com/dongasai/dsh_editor.git
   `web` 换成你要装进的 profile。
 - **钉版本**：URL 后加 `#`，例如
   `git+https://github.com/dongasai/dsh_editor.git#v1.0.0`（tag / 分支 / commit 都行）。
+  本仓库当前 tag 是 **`v1.0.0`**，对应 `package.json` 的 `1.0.0` —— 不带 `#` 就跟 `main` 走，
+  每次装到的都可能是新代码（本机开发用方式三的 `link:`，不受影响）。
 - **私有仓库**：`git+ssh://git@github.com/dongasai/dsh_editor.git`（需已配好 SSH key），
   或先把 HTTPS 凭据配好。
 - **必须带 `git+` 或 `github:` 前缀**。`git@github.com:owner/repo.git` 这种 scp 写法不会被认成
