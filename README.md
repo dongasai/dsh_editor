@@ -58,8 +58,8 @@ dsh plugin --profile web add git+https://github.com/dongasai/dsh_editor.git
 - `--profile` **必填**（不写直接报 `required option '--profile <name> not specified'`）；
   `web` 换成你要装进的 profile。
 - **钉版本**：URL 后加 `#`，例如
-  `git+https://github.com/dongasai/dsh_editor.git#v1.0.0`（tag / 分支 / commit 都行）。
-  本仓库当前 tag 是 **`v1.0.0`**，对应 `package.json` 的 `1.0.0` —— 不带 `#` 就跟 `main` 走，
+  `git+https://github.com/dongasai/dsh_editor.git#v1.1.0`（tag / 分支 / commit 都行）。
+  本仓库当前 tag 是 **`v1.1.0`**，对应 `package.json` 的 `1.1.0` —— 不带 `#` 就跟 `main` 走，
   每次装到的都可能是新代码（本机开发用方式三的 `link:`，不受影响）。
 - **私有仓库**：`git+ssh://git@github.com/dongasai/dsh_editor.git`（需已配好 SSH key），
   或先把 HTTPS 凭据配好。
@@ -141,7 +141,7 @@ dsh plugin --profile web add link:/data/ai/dsh/dsh_editor
 （模型或别的工具动过），Host 会拒绝，确认条上改说「这个条目在确认期间变过，没有删除」并把按钮换成
 「仍然删除」——要删得再点一次。
 
-面板**最底部固定一行插件信息**（`工作区文件编辑器 · v1.0.0` 这样），鼠标放上去显示插件的介绍；
+面板**最底部固定一行插件信息**（`工作区文件编辑器 · v1.1.0` 这样），鼠标放上去显示插件的介绍；
 标题与版本号是从 Host 的插件清单里**现读**的（按包名认领自己那一行），所以升级插件后这里自己就变，
 不需要谁去改客户端；部署里没有插件管理器（读不到清单）时只显示包名 `@dongasai/dsh-editor`，
 关掉面板重开一次会再试一遍。
