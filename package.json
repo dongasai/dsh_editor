@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Edit, create, rename, copy and delete workspace files in the DSH web GUI: an editable document renderer, a file-tree sidebar tool, and five trusted host routes.",
+  "description": "Edit, create, rename, copy, delete and paste workspace files in the DSH web GUI: an editable document renderer, a file-tree sidebar tool with its own clipboard, and six trusted host routes.",
   "icon": "./icon.svg",
   "meta": {
     "title": "工作区文件编辑器",

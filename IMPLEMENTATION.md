@@ -3,7 +3,7 @@
 面向改这个插件的人（人和代理）。**怎么用**见 [README.md](README.md)，这里是**为什么这么写**：
 设计决策、两半怎么拼起来、以及每条约束背后踩过的坑。与代码冲突时以代码为准。
 
-源码只有两个文件，一个包两半：[index.js](index.js)（Host 半边，五条路由）与
+源码只有两个文件，一个包两半：[index.js](index.js)（Host 半边，六条路由）与
 [client.js](client.js)（浏览器半边，编辑器 + 「文件编辑」面板）。
 
 ## 一页总览
@@ -11,8 +11,8 @@
 ```
 Harness 启动（profile 作用域）
   └─ index.js 的 apply(ctx)
-       └─ 按 ENDPOINTS 表注册五条精确路由：
-          write / delete / mkdir / rename / copy
+       └─ 按 ENDPOINTS 表注册六条精确路由：
+          write / delete / mkdir / rename / copy / upload
           └─ 每次变更：POST → route(ctx, req, res, endpoint)
                ├─ rejected()            Connection 信任围栏（不可信 Host/Origin、未认证）
                ├─ 媒体类型 / 请求体 / 字段校验（endpoint.parse）
@@ -22,7 +22,7 @@ Harness 启动（profile 作用域）
                │    ├─ lstat                  最终节点必须是普通文件（符号链接一律拒）
                │    ├─ resolve + contains     路径围栏：必须落在会话工作区内
                │    └─ ctx.fs.writeText()     带沙箱策略与版本闸的原子写
-               └─ delete / mkdir / rename / copy  ← 四条走 node:fs
+               └─ delete / mkdir / rename / copy / upload  ← 五条走 node:fs
                     ├─ guardMutation()        会话根 → resolve/contains → 自己判 read-only
                     ├─ entryNoFollow()        lstat：符号链接一律拒
                     ├─ requireParentDirectory()  目标父级必须存在且是目录
@@ -30,7 +30,8 @@ Harness 启动（profile 作用域）
                     │          unlink / rmdir / rm -r（recursive 由客户端显式确认后才带）
                     ├─ mkdir：  mkdir（EEXIST → 409 target-exists）
                     ├─ rename： 源存在 + 目标不存在 + 不搬进自己子树 → rename(2)
-                    └─ copy：   copyFile(COPYFILE_EXCL)（内核级排他，不覆盖）
+                    ├─ copy：   copyFile(COPYFILE_EXCL)（内核级排他，不覆盖）
+                    └─ upload： writeFile(data, { flag: 'wx' })（base64 解码后的二进制，只建新文件）
 
 浏览器加载（bundle 由 dsh-client-modules 从磁盘现读）
   └─ client.js 的 factory → apply(ctx)
@@ -43,12 +44,15 @@ Harness 启动（profile 作用域）
        ├─ slots.register                   同一槽位的「🗑 删除」按钮（order 6）
        ├─ sidebarRightTabs.register         kind: workspace-editor-files（页类型，guide 卡片入口）
        ├─ slots.register                   sidebar.right.pane.tab 的「文件编辑」文件树面板
+       │    └─ 粘贴：内部剪贴板（模块级，复制 / 剪切）优先 → 复制 / 改名路由
+       │              否则系统剪贴板里的文件（Ctrl/Cmd+V 的 paste 事件，或 navigator.clipboard.read）
+       │              → POST /workspace-editor/upload（base64 → 新文件）
        └─ shortcuts.register                workspace.editor.files（Ctrl/Cmd+Alt+E）
                     ↓ 三个入口共用
               EditorSurface：读盘 → 草稿 → 版本闸保存 → 冲突横幅
                     ├─ 语法高亮层：textarea 底下那层可见文字（字透明）+ Custom Highlight API 上色
                     ↓ 读走 ctx.remote.workspaceFiles.readBytes / list / stat / changes（官方只读接口）
-                    ↓ 写走 fetch('/workspace-editor/*')（本插件自己的五条路由）
+                    ↓ 写走 fetch('/workspace-editor/*')（本插件自己的六条路由）
 ```
 
 两条通道刻意分开：**读**复用官方生成的 Remote 客户端（类型安全、不用自己造
@@ -125,7 +129,7 @@ selected = candidates.find((id) => id === state.rendererId) ?? candidates[0]
 自己的声明面，插件只能往已声明的槽位里注册）。
 
 面板与官方文件树的差别只有一处是本质的：**它自带写操作**。官方面板只调
-`workspaceFiles.list` / `changes` 这类只读 Remote，本插件面板的每个变更都打到自己的五条路由上。
+`workspaceFiles.list` / `changes` 这类只读 Remote，本插件面板的每个变更都打到自己的六条路由上。
 
 ## Host 半边：一次保存的完整路径
 
@@ -136,7 +140,7 @@ route(ctx, req, res, endpoint)
   ├─ mediaTypeOf(req) !== application/json    → 415 unsupported-media-type
   ├─ requestLifetime(req, res)               断连 或 30s 墙钟 → AbortSignal
   ├─ readBody(req)                           8 MiB 上限，超限先 req.resume() 再抛 413
-  ├─ endpoint.parse(value)                   五条路由各自的字段校验
+  ├─ endpoint.parse(value)                   六条路由各自的字段校验
   └─ endpoint.run(ctx, input, signal)
        ├─ writeWorkspaceFile()               ← 唯一走 ctx.fs 的一条
        │    ├─ resolveSessionRoot()          活会话 header.cwd → 存档头 → 404
@@ -145,7 +149,7 @@ route(ctx, req, res, endpoint)
        │    ├─ policy = sandboxPolicy.resolve({ session })   ← 交给 ctx.fs 执行
        │    ├─ intent = createIfAbsent | replaceIfVersion | undefined
        │    └─ ctx.fs.writeText(target, content, intent, signal, policy)
-       └─ delete / mkdir / rename / copy      ← 四条走 node:fs
+       └─ delete / mkdir / rename / copy / upload   ← 五条走 node:fs
             ├─ guardMutation()               会话根 → resolve/contains → 自己拒绝 read-only
             ├─ entryNoFollow()               路径本身是符号链接 → 409 not-regular-file
             ├─ requireParentDirectory()      父级不存在 → 404，父级不是目录 → 409
@@ -153,12 +157,14 @@ route(ctx, req, res, endpoint)
             │          unlink | rmdir | rm -r（recursive 只有客户端确认过才带）
             ├─ mkdir： mkdir（EEXIST → 409 target-exists）
             ├─ rename：目标已存在 → 409 target-exists；搬进自己子树 → 409 invalid-target
-            └─ copy：  copyFile(..., COPYFILE_EXCL)（EEXIST → 409 target-exists）
+            ├─ copy：  copyFile(..., COPYFILE_EXCL)（EEXIST → 409 target-exists）
+            └─ upload：base64 解码 → writeFile(..., { flag: 'wx' })（EEXIST → 409 target-exists）
 ```
 
-五条路由**共用同一个外壳**（围栏 → 方法 → 媒体类型 → 生命周期 → 校验 → 落盘 → 应答），差异
+六条路由**共用同一个外壳**（围栏 → 方法 → 媒体类型 → 生命周期 → 校验 → 落盘 → 应答），差异
 只在 `ENDPOINTS` 表里的三项：路径、校验器、落盘实现，外加 500 时用的失败码
-（`write-failed` / `delete-failed` / `mkdir-failed` / `rename-failed` / `copy-failed`）。
+（`write-failed` / `delete-failed` / `mkdir-failed` / `rename-failed` / `copy-failed` /
+`upload-failed`）。
 外壳共用是刻意的：三道闸的顺序、断连语义、应答形状只有一份，改一处不会漏另一处。
 
 几个刻意的选择：
@@ -173,26 +179,28 @@ route(ctx, req, res, endpoint)
 - **`requestLifetime` 只在「应答没写完就断开」时才算客户端走了**（`!res.writableEnded`），
   否则正常应答结束触发的 `close` 会把成功写入判成取消。
 
-## 删除 / 改名 / 建目录 / 复制为什么走 `node:fs`（以及它们的代价）
+## 删除 / 改名 / 建目录 / 复制 / 粘贴上传为什么走 `node:fs`（以及它们的代价）
 
-`ctx.fs` 的变更面**只有** `writeText` / `editText`；`FileSystem` 抽象类里没有删除、改名、建目录或
-复制的方法，官方 `workspaceFiles` Remote 也全是只读。要让 GUI 能整理文件，只有两条路：改官方包
-（本插件是 `link:` 安装的第三方插件，不该也不会去改），或者在这一层用 `node:fs`。
+`ctx.fs` 的变更面**只有** `writeText` / `editText`；`FileSystem` 抽象类里没有删除、改名、建目录、
+复制或**写二进制**的方法，官方 `workspaceFiles` Remote 也全是只读。要让 GUI 能整理文件，只有两条
+路：改官方包（本插件是 `link:` 安装的第三方插件，不该也不会去改），或者在这一层用 `node:fs`。
 
-于是有四条必须记住的代价：
+于是有五条必须记住的代价：
 
 1. **沙箱策略那道闸不再自动生效。** 写路径把 `ctx.sandboxPolicy.resolve({ session })` 交给
    `ctx.fs.writeText`，由组合文件系统（`dsh-fs-sandbox`）在真正落盘前拒绝越界；`node:fs` 绕过了
-   整个 `ctx.fs`，这层保护没有了。所以四条路由都从 `guardMutation()` 过：解析同一份策略，并且
+   整个 `ctx.fs`，这层保护没有了。所以五条路由都从 `guardMutation()` 过：解析同一份策略，并且
    `policy.mode === 'read-only'` 一律 403 `denied` —— 这不是「顺手加的一层」，而是**补回**被绕过
-   的那道闸。改这四条路径时，这一条和 `entryNoFollow()` 的软链检查都不能省。
+   的那道闸。`upload` 也一样：它虽然写的是「内容」，但走的是 `writeFile`，所以第三道闸必须自己判。
+   改这五条路径时，这一条和 `entryNoFollow()` 的软链检查都不能省。
 2. **版本闸与落盘之间有一个毫秒级窗口。** 写入是原子的（`writeFileAtomic`），但 POSIX 没有
    「inode 一致才 unlink / rename」的系统调用：删除先 `ctx.fs.stat` 比对版本令牌，紧接着 `unlink`；
    改名先判「目标不存在」，紧接着 `rename(2)`（它会覆盖已存在的目标）。如果另一个进程正好落在
    窗口里（典型的写法就是「写临时文件 + rename」），被删掉 / 被覆盖的会是**新**那份。窗口极小
    （两个相邻的 syscall），而且**用户点删除的意图本来就是「删掉这个路径上的条目」**，所以接受这个
    残余风险，不去做「先改名再校验」的花活（改名本身会改 ctime，版本令牌就不再可比）。
-   **复制是唯一没有这个窗口的**：`copyFile(..., COPYFILE_EXCL)` 让内核来判「目标必须不存在」。
+   **复制与粘贴上传没有这个窗口**：`copyFile(..., COPYFILE_EXCL)` 与 `writeFile(..., { flag: 'wx' })`
+   让内核来判「目标必须不存在」。
    真要更强，只能给 `ctx.fs` 层加变更接口 —— 那是官方包的边界，不在这里。
 3. **目录的版本闸只盖到直接条目。** 目录的版本令牌是它自己的 inode 元数据（`mtime`/`ctime`），
    直接子项增删会变、子目录**内部**的改动不会变。所以「递归删除」确认之后，如果有人在某个子目录
@@ -201,15 +209,24 @@ route(ctx, req, res, endpoint)
 4. **errno 自己翻译。** `node:fs` 抛的是 Node 的 `Error`（`code: 'ENOENT'` / `'EEXIST'` /
    `'ENOTEMPTY'` 这类），不是 `FsError`；`NODE_FAILURES` 把它们映射到与 `FS_FAILURES` 同一套线上
    码（`not-found` / `target-exists` / `not-empty` / `invalid-target` / …），映射不到的走各自路由的
-   500（`delete-failed` / `mkdir-failed` / `rename-failed` / `copy-failed`）。
+   500（`delete-failed` / `mkdir-failed` / `rename-failed` / `copy-failed` / `upload-failed`）。
+5. **base64 校验不能用大正则。** `upload` 的正文是 base64，第一版校验写成
+   `/^(?:[A-Za-z0-9+/]{4})*…$/` —— 在**正好 4 MiB** 的载荷上，V8 的 regexp 栈直接被这个量词撑爆，
+   抛 `RangeError: Maximum call stack size exceeded`，被 500 兜成 `upload-failed`。探针里真踩到，
+   现在改成一次线性字符扫描（先判长度能被 4 整除、再逐字符判字母表与结尾的 `=`）。大输入的校验
+   一律按这个教训写：**不要拿大量词去套几 MB 的字符串**。
 
-**改名与复制刻意不带版本闸**：它们不改内容，用户点它的意思是「换名字 / 拷一份」。它们要防的是
-「把别人的东西顶掉」，所以卡的是「目标必须不存在」—— 复制做成内核级排他，改名是预检加窗口（见
-代价 2）。删除才需要版本闸，因为它是唯一会丢内容的操作。
+**改名、复制与粘贴上传刻意不带版本闸**：它们不改已有内容，用户点它的意思是「换名字 / 拷一份 /
+把剪贴板里的东西放进来」。它们要防的是「把别人的东西顶掉」，所以卡的是「目标必须不存在」——
+复制与粘贴上传做成内核级排他，改名是预检加窗口（见代价 2）。删除才需要版本闸，因为它是唯一会
+丢内容的操作。
 
 ## 「文件编辑」面板：浏览器侧的设计
 
-面板是一个**页类型**（见 D4），正文 `FilesTree` 的全部状态都在组件里，没有自建 store：
+面板是一个**页类型**（见 D4），正文 `FilesTree` 的状态都在组件里，没有自建 store —— 只有一处
+刻意的例外：**剪贴板**。它跟草稿一样是「跨重挂」的界面状态（关掉面板再打开不该丢），所以放在
+模块级的 `filesClipboard` 里，组件只持有它的渲染镜像；它记的是一条 `{ mode, path, name }`，
+路径真不真由 Host 的三道闸兜底（换会话后粘贴会被 403 `outside-workspace` 挡下，不会贴错地方）。
 
 - **懒加载**：一层目录一次 `workspaceFiles.list(sessionId, 绝对路径, signal)`。用**绝对路径**
   而不是相对路径，跟官方文件树保持一致（`changes` 的目标绑定也是按绝对路径记的）。
@@ -225,6 +242,16 @@ route(ctx, req, res, endpoint)
   `not-empty`（确认期间目录里多了东西）→ 升级成递归确认并**丢掉已经失效的版本基线**。
 - **拖拽**：HTML5 拖放，`dragRef` 记住被拖的路径；落点是目录行（或树的空白处 = 工作区根）。
   自己所在目录、自己的子树、以及「拖到自己身上」都直接不接受（`isInside`）。
+- **粘贴（两个来源，一场两路）**：**内部剪贴板优先**。
+  1. **树内剪贴板**：「复制到剪贴板」/「剪切」/ Ctrl+C / Ctrl+X 写模块级 `filesClipboard`。
+     粘贴时复制走 `POST /copy`（重名先按已列出的条目编号，剪贴板**保留**，可以连着贴几处）、
+     剪切走 `POST /rename`（重名直接报「目标已经存在」—— 移动悄悄改名比报错更糟），贴成功后清空。
+  2. **系统剪贴板里的文件**：键盘 Ctrl/Cmd+V 走 `paste` 事件（`clipboardData` 里的 `File` 带
+     **真文件名**），菜单 / 工具条上的「粘贴」只能走 `navigator.clipboard.read()`（那个 API
+     **不携带文件名**，只能按 MIME 起名 `pasted-<时间戳>.<扩展名>`）。两条路最后都打成
+     `POST /upload`：base64 → `writeFile(wx)` 建**新文件**，绝不覆盖。
+  `paste` 事件只处理文件：纯文本一律不 `preventDefault`（往这棵树里贴文本没有去处），剪贴板里
+  的**目录**明确说不支持 —— 浏览器拿得到目录入口、拿不到它的内容（这条也写进了 README 的已知边界）。
 - **打开文件**：单击文件行 → `ctx.sidebarRight.openResource(absoluteFileAddress(path), { kind:
   'workspace-editor', paneId })` —— 带上**本面板所在 pane**、不带 `replaceTab`，所以面板不会被
   顶掉，同一栏里多一张编辑器页签（同一个文件已经有编辑器页签时按 reveal 语义聚焦它）。
@@ -394,14 +421,14 @@ React 卸载整棵子树 —— 编辑器白屏（探针抓到的真 bug）。�
    `FsError` 等类型改为按 `error.code` 结构化判别，不 import 官方包，也不导出 `Config`
    （那需要 schemastery）。
 2. **变更必须过三道闸**：Connection 信任围栏 → 会话工作区包含性检查 → 沙箱策略围栏。写路径的
-   第三道闸由 `ctx.fs.writeText` 执行；**删除 / 建目录 / 改名 / 复制绕过了 `ctx.fs`**，必须走
-   `guardMutation()` 自己按 `policy.mode === 'read-only'` 拒绝，且每一步都过 `entryNoFollow()`
-   （软链一律拒绝）。三道闸任一被绕过都是安全回归，不要为了「方便保存 / 方便删除」放宽其中任何
-   一道。
+   第三道闸由 `ctx.fs.writeText` 执行；**删除 / 建目录 / 改名 / 复制 / 粘贴上传绕过了 `ctx.fs`**，
+   必须走 `guardMutation()` 自己按 `policy.mode === 'read-only'` 拒绝，且每一步都过
+   `entryNoFollow()`（软链一律拒绝）。三道闸任一被绕过都是安全回归，不要为了「方便保存 /
+   方便删除 / 方便粘贴」放宽其中任何一道。
 3. **破坏性变更带版本闸，覆盖性变更带排他**：写用 `expectedVersion` → `{ kind: 'replaceIfVersion' }`
    （`create` 走 `createIfAbsent`）；删在落盘前逐字比对同一个版本令牌；改名卡「目标必须不存在」；
-   复制用 `COPYFILE_EXCL`。磁盘在期间变过就返回 `stale-version`，由用户显式选择覆盖 / 仍然删除
-   （不带 `expectedVersion` 才是无条件变更）。
+   复制用 `COPYFILE_EXCL`、粘贴上传用 `writeFile` 的 `wx`。磁盘在期间变过就返回 `stale-version`，
+   由用户显式选择覆盖 / 仍然删除（不带 `expectedVersion` 才是无条件变更）。
 4. **不改观察状态**：`index.js` 刻意**不** `emit('fs/observed', …)`。FS 观察策略要求 `edit`
    前必须读过文件，人工在 GUI 里改过的文件对模型来说就是「没读过」—— 模型应当重新 `read`
    之后再改，这是正确的语义，别用一条 emit 把它「喂」成已观察。
@@ -425,6 +452,17 @@ React 卸载整棵子树 —— 编辑器白屏（探针抓到的真 bug）。�
 > 则用**无头 Chrome + 真 React** 把真 `client.js` 挂起来量（高亮层与 textarea 的镜像逐字符比坐标、
 > 顶部与底部各比一次、wrap 开 / 关各一遍）。探针抓到过两个真 bug：能力探测被自己的 `const CSS`
 > 遮蔽、`Range` 边界传了元素节点（后者会让编辑器白屏）。
+>
+> 加「粘贴」时同款三层探针：①Host 路由（桩 ctx + 真 HTTP + 真 `node:fs`，50 条：三道闸、
+> 工作区越界、软链、已存在目标不覆盖、`wx` 排他、base64 合法 / 非法、上限与边界、`read-only`
+> 会话与冷会话策略）；②`/* paste:start */` … `/* paste:end */` 那段纯函数（24 条：base64 分块
+> 与 `Buffer` 对照、缺名命名、从 `ClipboardEvent` 里挑文件 / 认目录）；③**真 jsdom + 真 React +
+> 真 `client.js`** 挂起整块面板（52 条：Ctrl+V 贴二进制文件、重名编号、内部复制 / 剪切 / 粘贴、
+> 工具条粘贴、Ctrl+C/Ctrl+X、剪贴板活过重挂、面板没被搞坏）。这一轮探针抓到两个真 bug：
+> **4 MiB 的 base64 校验正则把 V8 的 regexp 栈撑爆**（改成线性扫描，见 Host 一节代价 5）、
+> 以及 jsdom 的 `File` 没有 `arrayBuffer()`（那是 jsdom 的缺口，探针里补上，不是产品 bug）。
+> 真无头 Chrome 这次**没跑起来**（DSH 的 bwrap 沙箱下 Chrome 起不来：只读根 + PID 命名空间），
+> 所以「真浏览器与系统剪贴板」那一段仍以 README 的手工清单为准。
 
 ## 明确不做的事
 
@@ -437,6 +475,9 @@ React 卸载整棵子树 —— 编辑器白屏（探针抓到的真 bug）。�
 | 改官方 `ui-sidebar-files` | 那是官方的 store 与交互；要更强的文件处理就自己注册一个页类型（D4） |
 | 删除进回收站 / 软删 | 工作区里多一个 `.trash` 目录会污染文件树与 Agent 视野；用户要的是「删掉」，不是「先堆着」 |
 | 递归复制目录 | 没有确认 UI 承载「拷一棵树」的代价；只读文件更常见，复制单文件够用 |
+| 把剪贴板里的**目录**粘进工作区 | 浏览器只给目录入口、不给内容，读不出来；搬目录用拖拽或改名 / 移动 |
+| 把剪贴板里的**文本**粘成新文件 | 那是另一个需求（贴文本 → 命名 → 建文件），这次只做「文件」这条路 |
+| 分片 / 断点续传地粘贴大文件 | 一次请求一份内容更简单，超 4 MiB 明确拒绝 |
 | 多选 / 批量操作 | 需要一套选择模型与批量确认，收益还没到；一次一个目标更不容易误伤 |
 | 在面板里重命名已打开的编辑器页签 | 页签归属方是侧边栏的 store，插件没有公开入口去改别人的记录；从面板再点一次即可 |
 | 递归新建中间目录（`mkdir -p`） | 一次一层更可预期；要建多级就分几次点 |
@@ -452,8 +493,8 @@ React 卸载整棵子树 —— 编辑器白屏（探针抓到的真 bug）。�
 | 文件 | 关系 |
 |---|---|
 | [README.md](README.md) | 用法：安装、怎么进编辑器、线上协议、排错、怎么验证、已知边界 |
-| [index.js](index.js) | Host 半边全部实现（五条路由、三道闸、版本闸、`node:fs` 的 errno 映射） |
-| [client.js](client.js) | 浏览器半边全部实现（三档入口、`EditorSurface`、草稿与冲突、删除按钮、文件编辑面板、语法高亮层与令牌表） |
+| [index.js](index.js) | Host 半边全部实现（六条路由、三道闸、版本闸、`node:fs` 的 errno 映射、base64 校验） |
+| [client.js](client.js) | 浏览器半边全部实现（三档入口、`EditorSurface`、草稿与冲突、删除按钮、文件编辑面板与剪贴板 / 粘贴、语法高亮层与令牌表） |
 | [cordis.patch.yml](cordis.patch.yml) | profile 里的插入行 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client` |
 | [AGENTS.md](AGENTS.md) | 给代理的速查：命令、约束清单、改动连带项 |

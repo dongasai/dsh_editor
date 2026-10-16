@@ -5,7 +5,8 @@
 `@deepseek-ai/dsh-api-workspace-files` 也明确写着 *"The service exposes no mutation operation."*，
 这个插件补上**写**与**删**的那一半 —— 可编辑的正文、保存按钮、未保存状态与冲突处理，预览头部
 的「🗑 删除」按钮（两次点击确认），外加一个自带文件树的右侧栏工具 **「文件编辑」**：新建、
-改名 / 移动、复制、删除、拖拽整理，都在 GUI 里做完。它们全部打到本插件自己的 Host 路由。
+改名 / 移动、复制 / 剪切 / 粘贴、删除、拖拽整理，都在 GUI 里做完 —— 包括把系统剪贴板里复制好的
+文件直接粘进工作区。它们全部打到本插件自己的 Host 路由。
 
 与「用终端 / 让 Agent 改」的差别不是快慢，而是**谁在改**：人在 GUI 里改完点保存，
 版本闸记得住「你读到的是哪一版」，磁盘中途被模型改过就停下来问，不静默覆盖；
@@ -122,7 +123,9 @@ dsh plugin --profile web add link:/data/ai/dsh/dsh_editor
 | 打开文件 | **单击文件行** → 在同一栏里开本插件的编辑器页签（面板自己不消失） |
 | 新建 | 工具条上的「新建文件 / 新建文件夹」落在**当前选中的目录**（选中文件时是它所在的目录）；也可以点某个目录行上的 + |
 | 改名 / 移动 | **四个入口**：行上铅笔（悬停出现）、行尾常显的「⋯」菜单、**右键菜单**、工具条上的铅笔（作用于选中行）。输入框里回车提交，名字里带 `/` 就是搬到子目录（`a/b.md`）；键盘党按 **F2** |
-| 复制 | 文件行上的复制按钮：同目录生成「xxx 副本」，重名自动往后编号；**目录不支持复制** |
+| 创建副本 | 文件行上的复制按钮：同目录生成「xxx 副本」，重名自动往后编号；**目录不支持复制** |
+| 复制 / 剪切到剪贴板 | 「⋯」或右键菜单里的**「复制到剪贴板」**（只收文件）与**「剪切」**（文件与目录都行）；键盘党在树上按 **Ctrl/Cmd+C** / **Ctrl/Cmd+X**。剪贴板贴着面板底部显示，带一个「清空」 |
+| 粘贴 | **Ctrl/Cmd+V** 贴系统剪贴板里的文件（在系统文件管理器里复制一个文件，回面板按一下就行）；菜单 / 工具条上的「粘贴」也贴同一份。**有内部剪贴板时优先贴内部那一份**：复制过来的是「再复制一份」（重名自动编号、剪贴板留着可以连贴），剪切过来的是**移动**（贴完剪贴板清空） |
 | 删除 | 行上的垃圾桶按钮 → **确认条**再点一次。空目录一次确认；非空目录确认条会报条目数，按钮是「递归删除」 |
 | 拖拽 | 把行拖到某个目录行上松手即可移动；拖到自己所在目录、或把目录拖进自己的子树都不接受 |
 
@@ -184,7 +187,7 @@ diff / patch，以及 C 家族（C/C++/Java/C#/Go/Rust/Kotlin/Swift/PHP 等，�
 
 | 文件 | 作用 |
 |---|---|
-| [index.js](index.js) | **Host 半边**：注册五条变更路由（`write` / `delete` / `mkdir` / `rename` / `copy`），做信任围栏、路径围栏、沙箱策略与版本闸；写走 `ctx.fs` 的原子写，其余四条走 `node:fs`。只 import `node:` 内置模块。 |
+| [index.js](index.js) | **Host 半边**：注册六条变更路由（`write` / `delete` / `mkdir` / `rename` / `copy` / `upload`），做信任围栏、路径围栏、沙箱策略与版本闸；写走 `ctx.fs` 的原子写，其余五条走 `node:fs`。只 import `node:` 内置模块。 |
 | [client.js](client.js) | **浏览器半边**：两档文档渲染器 + 编辑器页签类型 + 预览头部的「编辑」「删除」按钮 + 「文件编辑」工具面板（自带文件树）。 |
 | [cordis.patch.yml](cordis.patch.yml) | 只插入一行插件；浏览器半边由 `package.json` 的 `dsh.client` 声明，由 dsh-client-modules 扫出来。 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client`。 |
@@ -204,7 +207,7 @@ Host 半边 `inject`：`webServer` / `connection` / `fs` / `sandboxPolicy` / `se
 | `sidebar.right.pane.tab` | 该 id 的页签正文（编辑器） |
 | `sidebar.right.tab.document.actions` | id `workspace-editor`、`order: 5` 的「✎ 编辑」按钮；id `workspace-editor-delete`、`order: 6` 的「🗑 删除」按钮 |
 | `ctx.sidebarRightTabs.register` | kind `workspace-editor-files`，id `@dongasai/dsh-editor/files`，guide 卡片「文件编辑」（没有 patterns，只能按 kind 打开） |
-| `sidebar.right.pane.tab` | 该 id 的文件树面板正文（自带新建 / 改名 / 复制 / 删除 / 拖拽） |
+| `sidebar.right.pane.tab` | 该 id 的文件树面板正文（自带新建 / 改名 / 复制 / 剪切 / 粘贴 / 删除 / 拖拽） |
 | `ctx.shortcuts.register` | 命令 `workspace.editor.files`（默认 `Ctrl/Cmd+Alt+E`），打开「文件编辑」面板 |
 
 ## 哪些文件能进编辑器
@@ -258,38 +261,44 @@ content-type: application/json
 
 成功（200）：`{ "ok": true, "path": "/abs/path", "operation": "delete" }`
 
-建目录 / 改名 / 复制：
+建目录 / 改名 / 复制 / 粘贴上传：
 
 ```http
 POST /workspace-editor/mkdir     { "sessionId": "…", "path": "docs" }              // 不递归建父级
 POST /workspace-editor/rename    { "sessionId": "…", "from": "a.md", "to": "b/c.md" }   // 改名或移动
 POST /workspace-editor/copy      { "sessionId": "…", "from": "a.md", "to": "a 副本.md" } // 只复制文件
+POST /workspace-editor/upload    { "sessionId": "…", "path": "logo.png", "data": "iVBORw0…" } // base64 → 新文件
 ```
 
 成功（200）：`mkdir` → `{ "ok": true, "path": "…", "operation": "mkdir" }`；
-`rename` / `copy` → `{ "ok": true, "from": "…", "to": "…", "operation": "rename" | "copy" }`。
+`rename` / `copy` → `{ "ok": true, "from": "…", "to": "…", "operation": "rename" | "copy" }`；
+`upload` → `{ "ok": true, "path": "…", "operation": "upload", "bytes": 1234 }`。
 
-失败：`{ "code": "…", "message": "…", "fsCode": "…" }`，HTTP 状态按码给出。五条路由共用下表：
+`upload` 是「粘贴系统剪贴板里的文件」的落盘口：正文是 **base64**（可能是图片、压缩包这类二进制），
+目标一律**必须不存在** —— 它相当于复制（`COPYFILE_EXCL`），不是保存，没有版本闸、也不接受
+`expectedVersion`。重名由客户端先编号，真撞车由落盘那一步的 `wx` 拒绝。
+
+失败：`{ "code": "…", "message": "…", "fsCode": "…" }`，HTTP 状态按码给出。六条路由共用下表：
 
 | code | HTTP | 含义 |
 |---|---|---|
-| `bad-request` | 400 | 请求体不是 JSON 对象、字段类型不对（`sessionId` / `path` / `from` / `to` 必须是非空字符串，`content` 必须是字符串，`recursive` 必须是布尔） |
+| `bad-request` | 400 | 请求体不是 JSON 对象、字段类型不对（`sessionId` / `path` / `from` / `to` 必须是非空字符串，`content` / `data` 必须是字符串，`recursive` 必须是布尔），或 `upload` 的 `data` 不是规范 base64 |
 | `outside-workspace` | 403 | 目标不在该会话的工作区内（`rename` / `copy` 的两端都要在里面） |
-| `denied` | 403 | 沙箱策略拒绝（`read-only` 会话；写由 `ctx.fs` 判，其余四条由插件按 `ctx.sandboxPolicy.resolve` 自己判） |
+| `denied` | 403 | 沙箱策略拒绝（`read-only` 会话；写由 `ctx.fs` 判，其余五条由插件按 `ctx.sandboxPolicy.resolve` 自己判） |
 | `unknown-session` | 404 | 这个 Host 既不认识活会话，也没有它的存档头 |
-| `not-found` | 404 | 目标不存在，或父目录不存在（写：`create` 之外的模式；删 / 改名 / 复制：条目已经不在） |
+| `not-found` | 404 | 目标不存在，或父目录不存在（写：`create` 之外的模式；删 / 改名 / 复制：条目已经不在；粘贴上传：父目录不存在） |
 | `stale-version` | 409 | 磁盘上的条目变过（写：编辑期间；删：确认期间）或已被删除 —— UI 写提示「覆盖保存」、删提示「仍然删除」 |
 | `not-observed` | 409 | 写：`create` 模式下文件已存在 |
-| `target-exists` | 409 | 改名 / 复制 / 新建目录：目标已经存在（不覆盖、不改名；复制这一条是 `COPYFILE_EXCL` 的内核级拒绝） |
+| `target-exists` | 409 | 改名 / 复制 / 粘贴上传 / 新建目录：目标已经存在（不覆盖、不改名；复制是 `COPYFILE_EXCL`、粘贴上传是 `writeFile` 的 `wx`，都是内核级拒绝） |
 | `not-empty` | 409 | 删除：目录不是空的，而这次没有带 `recursive: true` |
 | `invalid-target` | 409 | 改名 / 复制：源与目标是同一个路径，或把目录搬进它自己的子树 |
-| `not-regular-file` | 409 | 目标是符号链接（一律拒绝）或类型不对（复制只收普通文件，改名收文件与目录） |
+| `not-regular-file` | 409 | 目标是符号链接（一律拒绝）或类型不对（复制与粘贴上传只收普通文件，改名收文件与目录） |
 | `not-directory` | 409 | 路径中间的一段不是目录（父级不存在是 404 `not-found`） |
-| `too-large` | 413 | 请求体（8 MiB）或内容（4 MiB 字符）超限（仅写） |
+| `too-large` | 413 | 请求体（8 MiB）、内容（4 MiB 字符）或粘贴上传的字节（解码后 4 MiB）超限 |
 | `unsupported-media-type` | 415 | 不是 `application/json` |
 | `not-text` | 415 | 底层文件系统策略判定不是文本（本插件读盘走 `readBytes`，**不做**文本判定，所以这一条只在底层拒绝时出现；非 UTF-8 / 含 NUL 的文件通常由浏览器侧的 `TextDecoder` 先判掉，见「已知边界」） |
 | `aborted` | 408 | 客户端断开或超过 30s 墙钟上限 |
-| `write-failed` / `delete-failed` / `mkdir-failed` / `rename-failed` / `copy-failed` / `io-error` | 500 | 其它文件系统故障（原始信息在 `message`；后四个是各自路由上未映射的 `node:fs` errno） |
+| `write-failed` / `delete-failed` / `mkdir-failed` / `rename-failed` / `copy-failed` / `upload-failed` / `io-error` | 500 | 其它文件系统故障（原始信息在 `message`；后五个是各自路由上未映射的 `node:fs` errno） |
 
 其它方法一律 `405` 并带 `allow: POST`；所有应答都带 `cache-control: no-store`。
 
@@ -305,13 +314,14 @@ POST /workspace-editor/copy      { "sessionId": "…", "from": "a.md", "to": "a 
    想借软链写穿出去会被 403 挡住。
 3. **沙箱策略围栏**：写入显式带上 `ctx.sandboxPolicy.resolve({ session })`，由组合文件系统
    `ctx.fs` 再判一次（`read-only` 会话一律拒绝，`workspace-write` 只放行工作区内与平台临时区）。
-   **另外四条没有这层自动保护** —— `ctx.fs` 没有删除 / 改名 / 建目录 / 复制的接口，它们走
-   `node:fs`，所以插件按同一份 `ctx.sandboxPolicy.resolve({ session })` 自己判 `read-only`
+   **另外五条没有这层自动保护** —— `ctx.fs` 没有删除 / 改名 / 建目录 / 复制 / 写二进制的接口，
+   它们走 `node:fs`，所以插件按同一份 `ctx.sandboxPolicy.resolve({ session })` 自己判 `read-only`
    （`guardMutation()` 一处收口）。
 4. **破坏性变更有版本闸**：`expectedVersion` 写时走 `FsWriteIntent.replaceIfVersion`
    （或 `createIfAbsent`），写入是原子的；删时在落盘之前逐字比对同一个版本令牌。版本不符就
-   `FS_STALE_VERSION`，绝不静默覆盖、也绝不静默删除。**改名与复制不带版本闸**：它们防的是另一
-   件事 —— 目标必须不存在（改名预检，复制用 `COPYFILE_EXCL` 让内核来判）。
+   `FS_STALE_VERSION`，绝不静默覆盖、也绝不静默删除。**改名、复制与粘贴上传不带版本闸**：它们
+   防的是另一件事 —— 目标必须不存在（改名预检，复制用 `COPYFILE_EXCL`、粘贴上传用 `wx` 让内核
+   来判）。`upload` 的字节也走 `guardMutation()`：那是补回被 `node:fs` 绕过的第三道闸。
 
 边界说明：**这不是**内核级隔离。DSH 的文件沙箱本身是「可信代码对不可信路径」的包含性检查
 （官方注释原话：*containment, not a security boundary*），本插件与官方 Agent 的 `write`
@@ -353,7 +363,11 @@ Agent 写文件。
 | 保存报 413 | 内容超过 4 MiB 字符 / 请求体超过 8 MiB | 用别的工具改大文件 |
 | 引导页里没有「文件编辑」卡片 | 页签类型没注册（Host 半边没重启 / bundle 是旧的） | 刷新页面；改了 `index.js` 就重启 Harness |
 | 「文件编辑」面板里列表出不来 | 这个会话还没有工作区根，或工作区读不出来 | 面板会直接说「这个会话还没有工作区根」；否则横幅里有 Host 的原始诊断 |
-| 面板里新建 / 改名 / 复制报「Host 侧还没有这条路由」 | 只刷新了页面，`mkdir` / `rename` / `copy` 还没注册（静态 fallback 对 POST 回 405） | **重启 Harness** |
+| 面板里新建 / 改名 / 复制 / 粘贴报「Host 侧还没有这条路由」 | 只刷新了页面，`mkdir` / `rename` / `copy` / `upload` 还没注册（静态 fallback 对 POST 回 405） | **重启 Harness** |
+| 粘贴报「浏览器不让读剪贴板」 | 菜单 / 工具条上的「粘贴」走 `navigator.clipboard.read()`：非安全上下文或权限被拒时读不到 | 把鼠标点进树里，按 **Ctrl/Cmd+V**（`paste` 事件不受这条限制） |
+| 粘贴的文件名变成 `pasted-20261016-203245.png` 这样 | 菜单 / 工具条那条路走 `navigator.clipboard.read()`，**这个 API 不给文件名**，只能按 MIME 起名 | 想保住原文件名，用 **Ctrl/Cmd+V** 粘（`clipboardData` 带真名） |
+| 粘贴报「剪贴板里没有文件」 | 剪贴板里只有文本 | 先在系统文件管理器里复制一个**文件**；纯文本粘贴不处理（那是另一个需求） |
+| 粘贴一个**目录**报不支持 | 浏览器拿不到剪贴板里目录的内容（只有入口，没有内容） | 用拖拽或改名 / 移动来搬目录 |
 | 面板里改名 / 复制报「目标已经存在」 | 目标路径已经有东西 | 换个名字；复制会自动往后编号，但列表可能已经过期 |
 | 面板里删目录报「目录不是空的」 | 你点「删除」之后目录里出现了新条目（版本闸之外的兜底） | 确认条会升级成「递归删除」，再点一次 |
 | 拖拽没反应 | 有些宿主环境（iframe / 触屏）不给 HTML5 拖放事件 | 用行上的铅笔按钮改名 / 移动（同一套 Host 路由） |
@@ -431,7 +445,21 @@ Agent 写文件。
      （`ls` 确认），面板自己也刷出来了。
    - 改名：**四个入口都要试一次** —— 行尾「⋯」菜单、右键菜单、工具条铅笔（先点一行再点它）、
      行上悬停出现的铅笔；键盘 **F2** 也可以。回车生效；输入 `sub/name.md` 会搬进子目录。
-   - 复制：文件行上的复制按钮生成「xxx 副本」；再点一次是「xxx 副本 2」。
+   - 创建副本：文件行上的复制按钮生成「xxx 副本」；再点一次是「xxx 副本 2」。
+   - **粘贴系统剪贴板里的文件**：在系统文件管理器里复制一个文件（图片最好，能顺带验二进制），
+     回到面板，鼠标点进树里按 **Ctrl/Cmd+V** —— 文件出现在当前选中目录（选中文件时是它所在的
+     目录），`ls` 能看到它，字节与源文件一致（`cmp`）。面板列表自己刷出新行。
+     重名再贴一次应变成「xxx 2.ext」。把复制的是**目录**的情况也试一下：应明确说「目录不支持」，
+     不产生 0 字节文件。
+   - 菜单 / 工具条上的「粘贴」也贴同一份剪贴板里的文件（这条路读不到文件名，会按 MIME 起名成
+     `pasted-<时间戳>.png`）；浏览器不给读剪贴板时应提示「按 Ctrl/Cmd+V」。
+   - **内部剪贴板**：文件行「⋯」→「复制到剪贴板」，面板底部出现剪贴板行（`data-workspace-editor-files-clipboard`，
+     带 `data-workspace-editor-files-clipboard-mode="copy"`）；再到某个目录行「⋯」→「粘贴」，
+     该目录里出现同名文件，内容一致；再贴一次自动编号。换成「剪切」再粘进另一个目录 = **移动**
+     （原位置消失），贴完剪贴板行自己消失。「清空」按钮能清掉剪贴板行。
+   - 键盘：点一行后按 **Ctrl/Cmd+C** / **Ctrl/Cmd+X** 应出现剪贴板行（目录上 Ctrl+C 不生效，
+     Ctrl+X 生效）；**F2** 仍是改名。
+   - 重挂：复制到剪贴板后切走再切回（关掉面板重开）剪贴板行仍在 —— 它是模块级状态，不是组件的。
    - 拖拽：把一个文件行拖到另一个目录行上松手，文件真的移动了；把目录拖进它自己的子树应无反应。
    - 删除：点垃圾桶 → 确认条 → 再点一次，文件消失；对**非空目录**按钮应显示「递归删除」，
      对空目录显示「删除」。想验版本闸：点「删除」后先在终端 `touch` 那个文件，再点确认 ——
@@ -478,7 +506,17 @@ Agent 写文件。
   版本闸是唯一的护栏。版本闸与落盘之间有一个毫秒级窗口（并发写正好落在里面时会删到刚写下的
   那一份）；改名的预检与 `rename(2)` 之间同理。代价与理由写在 [IMPLEMENTATION.md](IMPLEMENTATION.md)。
 - **「文件编辑」面板不做的事**：不支持多选 / 批量操作、不复制目录、不递归新建中间目录、不做
-  上传下载、没有搜索与过滤。「移动」只有两种做法：改名输入框里写相对路径、或拖到目录行上。
+  下载、没有搜索与过滤。「移动」只有两种做法：改名输入框里写相对路径、或拖到目录行上
+  （剪贴板粘贴也能移动，但那是「先剪切再贴」）。
+- **粘贴上传只有一条路、两个上限**：只处理**系统剪贴板里的文件**（一次最多 4 MiB / 个，
+  超了跳过并说明，剩下的继续贴）。纯文本粘贴**不处理**（不 `preventDefault`，留给浏览器默认
+  行为），剪贴板里的**目录**也只能明确说不支持 —— 浏览器拿得到目录入口、拿不到它的内容。
+- **两条粘贴路读到的信息不一样**：键盘 **Ctrl/Cmd+V** 走 `paste` 事件，`clipboardData` 里带
+  **真文件名**；菜单 / 工具条上的「粘贴」只能走 `navigator.clipboard.read()`，那个 API **不携带
+  文件名**，所以按 MIME 起名（`pasted-<时间戳>.<扩展名>`，未知类型是 `.bin`）。后者还需要安全
+  上下文（`http://127.0.0.1` 算安全上下文）与剪贴板读权限。
+- **剪贴板（内部那份）只活在内存里**：刷新页面、换个浏览器标签就没了；它记的是绝对路径，
+  换会话 / 换工作区后粘贴会被 Host 的包含性检查挡下来（403 `outside-workspace`），不会贴错地方。
 - **面板的版本闸只盖到「直接条目」**：删目录时比对的是目录自身的版本令牌（它随直接子项的增删
   变化），子目录**内部**的改动不会改变它 —— 递归删除的残余风险见 [IMPLEMENTATION.md](IMPLEMENTATION.md)。
 - **面板不会去动已经开着的编辑器页签**：在面板里改名 / 移动 / 删除一个正被编辑器打开的文件时，
@@ -510,6 +548,6 @@ Agent 写文件。
 |---|---|
 | [IMPLEMENTATION.md](IMPLEMENTATION.md) | 为什么这么实现：设计决策、两半怎么拼、四条约束与「文件编辑」面板的来龙去脉 |
 | [AGENTS.md](AGENTS.md) | 给代理的速查：命令、硬性约束、改动连带项 |
-| [index.js](index.js) | Host 半边全部实现（五条路由） |
+| [index.js](index.js) | Host 半边全部实现（六条路由） |
 | [client.js](client.js) | 浏览器半边全部实现（编辑器 + 「文件编辑」面板） |
 | [cordis.patch.yml](cordis.patch.yml) | profile 里的插入行 |

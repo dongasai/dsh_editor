@@ -83,6 +83,20 @@
  * 高亮那一段是**纯函数**（夹在 `highlight:start` 与 `highlight:end` 两个标记之间），不碰 React 与
  * DOM，可以整段截出来单独跑；Range 与注册表的胶水在它下面。来龙去脉与实测数据见
  * [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「语法高亮」一节。
+ *
+ * ## 「文件编辑」面板里的粘贴：两个来源，一场两路
+ *
+ * 面板的「粘贴」有两种来源，**内部剪贴板优先**：
+ *
+ * 1. **树内剪贴板**（「复制到剪贴板」/「剪切」/ Ctrl+C / Ctrl+X）—— 存在模块级 `filesClipboard`
+ *    里（像草稿一样活过重挂），粘贴时走官方的复制 / 改名路由，所以不碰二进制、也没有新路由。
+ * 2. **系统剪贴板里的文件** —— 键盘 Ctrl/Cmd+V 走 `paste` 事件（`clipboardData` 里带**真文件名**），
+ *    菜单 / 工具条上的「粘贴」按钮只能走 `navigator.clipboard.read()`（那个 API **不给文件名**，
+ *    只能按 MIME 起名）。两条路最后都打成 `POST /workspace-editor/upload`：base64 → 新文件，
+ *    目标必须不存在。
+ *
+ * `paste` 事件只处理**文件**，纯文本一律放行（不 `preventDefault`）；目录明确说明不支持 ——
+ * 浏览器拿不到剪贴板里目录的内容。
  */
 
 /**
@@ -114,6 +128,12 @@ window.__ModuleLoader__.load({
 
     /** 复制文件路由；与 Host 半边注册的绝对路径逐字一致。 */
     const COPY_URL = '/workspace-editor/copy'
+
+    /** 粘贴上传路由（base64 → 新文件）；与 Host 半边注册的绝对路径逐字一致。 */
+    const UPLOAD_URL = '/workspace-editor/upload'
+
+    /** 一次粘贴上传的字节上限：与 Host 的 `MAX_UPLOAD_BYTES` 同一个数，超了先在客户端拦下来。 */
+    const MAX_PASTE_BYTES = 4 * 1024 * 1024
 
     /** 能在这个编辑框里安全编辑的文本上限（UTF-16 码元）。 */
     const MAX_EDIT_CHARS = 1024 * 1024
@@ -165,6 +185,16 @@ window.__ModuleLoader__.load({
      * 不传标准 prop，见文件头注释）时从这里取。
      */
     const inputTargets = new Map()
+
+    /**
+     * 「文件编辑」面板的内部剪贴板（树里「复制到剪贴板」/「剪切」→ 在别的目录「粘贴」）。
+     *
+     * 刻意放在模块级：它和草稿一样是**跨重挂**的界面状态 —— 关掉面板再打开、切一下页签，剪贴板
+     * 不该就没了。约束 15 说的是「不要把目录树本身塞进模块级缓存」，剪贴板不是目录树：它只有一条
+     * `{ mode: 'copy' | 'cut', path, name }`，谁挂载谁读它，路径真不真由 Host 的三道闸兜底。
+     * 粘贴成功后剪切清空、复制保留（可以连着贴好几处）。
+     */
+    let filesClipboard = null
 
     /** 组件本地样式：随组件挂载渲染、卸载即消失，只用主题令牌。 */
     const CSS = `
@@ -248,6 +278,8 @@ window.__ModuleLoader__.load({
 .dsh-wef-note{margin:0;padding:3px 10px;color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dsh-wef-input{width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:2px 6px;border-radius:var(--dsw-radius-sm,6px);border:.5px solid var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);outline:none}
 .dsh-wef-status{flex:none;padding:6px 10px;border-top:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:12px}
+.dsh-wef-clip{flex:none;display:flex;align-items:center;gap:6px;padding:6px 10px;border-top:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:12px}
+.dsh-wef-clip-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-wef-gap{flex:1 1 auto}
 .dsh-wef-plugin{flex:none;margin:0;padding:6px 10px;border-top:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 `
@@ -289,16 +321,23 @@ window.__ModuleLoader__.load({
       'error.deleteRoute': 'Host 侧还没有这条删除路由（改过 index.js 之后要重启 Harness），文件没有被删除。',
       'delete.hint': '删除后无法恢复',
       'files.title': '文件编辑',
-      'files.guide': '自带文件树：新建、改名、复制、删除、拖拽移动',
+      'files.guide': '自带文件树：新建、改名、复制 / 剪切 / 粘贴（含系统剪贴板里的文件）、删除、拖拽移动',
       'files.shortcut': '打开「文件编辑」面板',
       'files.newFile': '新建文件',
       'files.newFolder': '新建文件夹',
       'files.rename': '重命名 / 移动',
-      'files.copy': '复制',
+      'files.copy': '创建副本',
+      'files.copyTo': '复制到剪贴板',
+      'files.cut': '剪切',
+      'files.paste': '粘贴',
+      'files.clipboard': '剪贴板：{name}（{mode}）',
+      'files.clipboardClear': '清空',
+      'files.clipboardMode.copy': '复制',
+      'files.clipboardMode.cut': '剪切',
       'files.delete': '删除',
       'files.refresh': '刷新',
       'files.open': '用编辑器打开',
-      'files.more': '更多操作（重命名 / 复制 / 删除）',
+      'files.more': '更多操作（重命名 / 复制 / 剪切 / 粘贴 / 删除）',
       'files.root': '工作区',
       'files.loading': '读取中…',
       'files.empty': '空目录',
@@ -325,6 +364,13 @@ window.__ModuleLoader__.load({
       'files.error.route': 'Host 侧还没有这条路由（改过 index.js 之后要重启 Harness）。',
       'files.error.transport': '请求没有到达 Host（连接中断？），什么都没改。',
       'files.error.generic': '操作失败（{code}）：{message}',
+      'files.error.tooLarge': '文件太大，超过上限，没有粘贴。',
+      'files.paste.empty': '剪贴板里没有文件（只读到文本）。先在系统里复制一个文件，再用 Ctrl/Cmd+V 或这个按钮粘贴。',
+      'files.paste.denied': '浏览器不让读剪贴板。把鼠标点进这棵树，按 Ctrl/Cmd+V 粘贴文件。',
+      'files.paste.unsupported': '这个浏览器不支持读剪贴板里的文件，请按 Ctrl/Cmd+V 粘贴。',
+      'files.paste.directory': '「{name}」是目录：剪贴板粘贴只支持文件，目录请用拖拽或改名移动。',
+      'files.paste.tooLarge': '「{name}」超过 {limit}，没有粘贴。',
+      'files.paste.readFailed': '「{name}」读不出来，没有粘贴。',
       'delete.stale': '文件已变更，未删除',
       'delete.noVersion': '读不到文件状态',
       'conflict.stale': '磁盘上的文件在编辑期间变过，尚未覆盖。',
@@ -381,16 +427,23 @@ window.__ModuleLoader__.load({
       'error.deleteRoute': 'The host has no delete route yet (restart the harness after changing index.js); the file was not deleted.',
       'delete.hint': 'Deleting cannot be undone',
       'files.title': 'File editor',
-      'files.guide': 'Its own file tree: create, rename, copy, delete, drag to move',
+      'files.guide': 'Its own file tree: create, rename, copy / cut / paste (including files from the system clipboard), delete, drag to move',
       'files.shortcut': 'Open the file editor panel',
       'files.newFile': 'New file',
       'files.newFolder': 'New folder',
       'files.rename': 'Rename / move',
-      'files.copy': 'Copy',
+      'files.copy': 'Duplicate',
+      'files.copyTo': 'Copy to clipboard',
+      'files.cut': 'Cut',
+      'files.paste': 'Paste',
+      'files.clipboard': 'Clipboard: {name} ({mode})',
+      'files.clipboardClear': 'Clear',
+      'files.clipboardMode.copy': 'copy',
+      'files.clipboardMode.cut': 'cut',
       'files.delete': 'Delete',
       'files.refresh': 'Refresh',
       'files.open': 'Open in the editor',
-      'files.more': 'More actions (rename / copy / delete)',
+      'files.more': 'More actions (rename / copy / cut / paste / delete)',
       'files.root': 'Workspace',
       'files.loading': 'Loading…',
       'files.empty': 'Empty folder',
@@ -417,6 +470,13 @@ window.__ModuleLoader__.load({
       'files.error.route': 'The host has no such route yet (restart the harness after changing index.js).',
       'files.error.transport': 'The request never reached the host (connection lost?). Nothing changed.',
       'files.error.generic': 'Operation failed ({code}): {message}',
+      'files.error.tooLarge': 'The file is too large; nothing was pasted.',
+      'files.paste.empty': 'The clipboard holds no files (only text). Copy a file in your system first, then paste with Ctrl/Cmd+V or this button.',
+      'files.paste.denied': 'The browser refused clipboard access. Click inside the tree and press Ctrl/Cmd+V to paste files.',
+      'files.paste.unsupported': 'This browser cannot read files from the clipboard; press Ctrl/Cmd+V to paste.',
+      'files.paste.directory': '"{name}" is a folder: clipboard paste only handles files; move folders by dragging or renaming.',
+      'files.paste.tooLarge': '"{name}" is over {limit}; nothing was pasted.',
+      'files.paste.readFailed': '"{name}" could not be read; nothing was pasted.',
       'delete.stale': 'File changed, not deleted',
       'delete.noVersion': 'File state unavailable',
       'conflict.stale': 'The file changed on disk while you were editing; nothing was overwritten.',
@@ -680,6 +740,97 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /* paste:start —— 粘贴的纯函数（不碰 React / DOM 状态）。调试脚本按这两个标记截出来单独跑。 */
+
+    /**
+     * 剪贴板里的 MIME → 文件后缀。
+     *
+     * 只有 `navigator.clipboard.read()` 这条路需要它：那个 API 给得出 blob 却**给不出文件名**
+     * （剪贴板条目不携带名字），只能按类型起一个。键盘粘贴走 `paste` 事件，`DataTransfer` 里的
+     * `File` 带着真名，用不到这张表。
+     */
+    const PASTE_EXTENSIONS = {
+      'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/gif': 'gif',
+      'image/webp': 'webp', 'image/bmp': 'bmp', 'image/avif': 'avif', 'image/svg+xml': 'svg',
+      'image/tiff': 'tiff', 'application/pdf': 'pdf', 'application/zip': 'zip',
+      'application/gzip': 'gz', 'application/x-tar': 'tar', 'application/json': 'json',
+      'application/octet-stream': 'bin', 'text/plain': 'txt', 'text/csv': 'csv',
+      'text/markdown': 'md', 'text/html': 'html',
+    }
+
+    /**
+     * 字节 → base64（`btoa` 只吃 latin1，所以按块喂）。
+     *
+     * 不用 `String.fromCharCode(...bytes)`：4 MiB 的文件展开成实参会撑爆调用栈（实参个数上限约
+     * 十万）。按 0x8000 一块切，既躲开栈上限，也不至于造出十万个小字符串。
+     * @param bytes - `Uint8Array`。
+     * @returns base64 文本。
+     */
+    function base64OfBytes(bytes) {
+      let latin1 = ''
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        latin1 += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+      }
+      return btoa(latin1)
+    }
+
+    /**
+     * 没有文件名时按 MIME 起一个：`pasted-20261016-203245.png`。
+     *
+     * 前缀刻意用 ASCII：这个名字会直接变成磁盘上的文件名，跨语言环境（en 界面、非中文文件系统）
+     * 下比「粘贴-…」安全。
+     * @param type - MIME 类型（可能是空串）。
+     * @param index - 同一次粘贴里的第几个（从 2 起才带序号）。
+     * @param now - 取时间戳用的 `Date`（便于调试脚本注入固定值）。
+     * @returns 文件名。
+     */
+    function pastedNameFor(type, index, now) {
+      const extension = PASTE_EXTENSIONS[type] ?? 'bin'
+      const at = now ?? new Date()
+      const pad = (value) => String(value).padStart(2, '0')
+      const stamp = `${String(at.getFullYear())}${pad(at.getMonth() + 1)}${pad(at.getDate())}`
+        + `-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`
+      return `pasted-${stamp}${index > 1 ? `-${String(index)}` : ''}.${extension}`
+    }
+
+    /**
+     * 从一次 `paste` 事件里取出可写的文件。
+     *
+     * 优先走 `clipboardData.items` + `webkitGetAsEntry()`：只有这条能认出「用户复制的是一个目录」
+     * （目录在剪贴板里没有内容可读，浏览器不给遍历），从而明确说明而不是造一个 0 字节文件。
+     * `dataTransfer.files` 只作为没有 `items` 的旧环境兜底。
+     * @param dataTransfer - `ClipboardEvent.clipboardData`（可能是 null）。
+     * @returns `{ files, directories }`：要写的文件，以及被跳过的目录名（认不出名字时是空串）。
+     */
+    function clipboardFilesOf(dataTransfer) {
+      const files = []
+      const directories = []
+      const items = dataTransfer?.items
+      if (items != null && items.length > 0) {
+        for (const item of items) {
+          if (item.kind !== 'file') continue
+          let entry = null
+          try {
+            entry = typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null
+          } catch {
+            entry = null
+          }
+          if (entry?.isDirectory === true) {
+            directories.push(typeof entry.name === 'string' ? entry.name : '')
+            continue
+          }
+          const file = typeof item.getAsFile === 'function' ? item.getAsFile() : null
+          if (file != null) files.push(file)
+        }
+        if (files.length > 0 || directories.length > 0) return { files, directories }
+      }
+      const list = dataTransfer?.files
+      if (list != null) for (const file of list) files.push(file)
+      return { files, directories }
+    }
+
+    /* paste:end */
+
     /**
      * 内联 SVG 图标：这个 bundle 没有构建步骤、也不能 require 官方图标包（它不在 boot 图里），
      * 所以图标是几段写死的 path。颜色只吃 `currentColor`，跟着主题令牌走。
@@ -693,6 +844,12 @@ window.__ModuleLoader__.load({
       newFolder: ['M1.8 4.2h4.1l1.4 1.9h6.9v7.7H1.8z', 'M8 8.6v3', 'M6.5 10.1h3'],
       rename: ['M2.2 13.8l.9-3 7.4-7.4 2.1 2.1-7.4 7.4z'],
       copy: ['M5.6 1.8h6.6v9.4H5.6z', 'M3.8 4.8v9.4h6.6'],
+      cut: [
+        'M5.3 3.2 10.4 10.1', 'M10.7 3.2 5.6 10.1',
+        'M2.8 11.7a1.6 1.6 0 1 0 3.2 0 1.6 1.6 0 1 0-3.2 0',
+        'M10 11.7a1.6 1.6 0 1 0 3.2 0 1.6 1.6 0 1 0-3.2 0',
+      ],
+      paste: ['M4.6 3.8h6.8v9.6H4.6z', 'M6.6 3.8V2.4h2.8v1.4', 'M6.4 7.2h3.2', 'M6.4 9.6h3.2'],
       trash: ['M2.8 4.6h10.4', 'M6.3 4.6V2.9h3.4v1.7', 'M4.4 4.6l.7 9.1h5.8l.7-9.1'],
       refresh: ['M13 8a5 5 0 1 1-1.7-3.7', 'M13.3 2.6v3.2h-3.2'],
       open: ['M2.5 12.5V6h6.5l-2.4 2.4', 'M6.6 3.5h6v6'],
@@ -2332,8 +2489,9 @@ window.__ModuleLoader__.load({
      *
      * 与「工作区文件」面板的关系：两者都是右侧栏的**页签类型**（`sidebarRightTabs.register`
      * + `sidebar.right.pane.tab`），都按目录懒加载、都订阅官方的 `workspaceFiles.changes`。
-     * 差别在于这个面板自带写操作 —— 新建、改名 / 移动、复制、删除都打到本插件自己的 Host 路由
-     * （官方 `workspaceFiles` 是只读的），并且**单击文件直接开本插件的编辑器页签**。
+     * 差别在于这个面板自带写操作 —— 新建、改名 / 移动、创建副本、复制 / 剪切 / 粘贴、删除都打到本
+     * 插件自己的 Host 路由（官方 `workspaceFiles` 是只读的），并且**单击文件直接开本插件的编辑器
+     * 页签**。
      * @param ctx - 客户端根上下文。
      * @returns 面板正文与 guide 卡片上的图标。
      */
@@ -2384,6 +2542,7 @@ window.__ModuleLoader__.load({
           denied: 'files.error.denied',
           'not-found': 'files.error.notFound',
           'invalid-target': 'files.error.invalid',
+          'too-large': 'files.error.tooLarge',
         }
         const key = known[outcome.code]
         if (key !== undefined) return t(key)
@@ -2456,6 +2615,10 @@ window.__ModuleLoader__.load({
         const [dropOn, setDropOn] = React.useState(null)
         /** 右键菜单：`{ path, type, x, y }`；坐标是视口坐标（菜单用 position:fixed）。 */
         const [menu, setMenu] = React.useState(null)
+        /** 内部剪贴板的渲染镜像：模块级那份是真相，这里只是为了横幅与菜单跟着变。 */
+        const [clipboard, setClipboard] = React.useState(filesClipboard)
+        /** 树正文元素：点过一行之后把焦点收回它，键盘 Ctrl/Cmd+V 才落在这棵树里。 */
+        const bodyRef = React.useRef(null)
         const aliveRef = React.useRef(true)
         const levelsRef = React.useRef(levels)
         levelsRef.current = levels
@@ -2614,12 +2777,13 @@ window.__ModuleLoader__.load({
           })
         }
 
-        /** 点一行：目录展开 / 收起，文件直接进编辑器。 */
+        /** 点一行：目录展开 / 收起，文件直接进编辑器。顺手把焦点收回树正文，键盘粘贴才有落点。 */
         const activate = (path, type) => {
           setSelected(path)
           setError(null)
           setPending(null)
           setMenu(null)
+          bodyRef.current?.focus({ preventScroll: true })
           if (type === 'directory') toggle(path)
           else openFile(path)
         }
@@ -2708,17 +2872,32 @@ window.__ModuleLoader__.load({
           if (draft.mode === 'file') openFile(target)
         }
 
+        /**
+         * 在一个目录里挑一个不冲突的名字：首选名字被占了就 `x 2.txt`、`x 3.txt`…
+         *
+         * 只拿「已经列出来的条目」做参考，而且**只是让用户少撞一次墙** —— 真撞车仍然由 Host
+         * 拒绝（复制是 `COPYFILE_EXCL`、粘贴上传是 `wx`），这里不假装自己是原子操作。
+         * @param dir - 目标目录的绝对路径。
+         * @param preferred - 首选名字。
+         * @returns 可用的名字（都被占了就返回首选，让 Host 去报「目标已经存在」）。
+         */
+        const uniqueNameIn = (dir, preferred) => {
+          const taken = new Set((levelsRef.current[dir]?.entries ?? []).map((entry) => entry.name))
+          if (!taken.has(preferred)) return preferred
+          const dot = preferred.lastIndexOf('.')
+          const stem = dot <= 0 ? preferred : preferred.slice(0, dot)
+          const tail = dot <= 0 ? '' : preferred.slice(dot)
+          for (let index = 2; index < 20; index += 1) {
+            const candidate = `${stem} ${String(index)}${tail}`
+            if (!taken.has(candidate)) return candidate
+          }
+          return preferred
+        }
+
         /** 复制一个文件：同目录下的「xxx 副本」，重名就往后编号（Host 仍会拒绝覆盖）。 */
         const copyEntry = async (path) => {
           const dir = parentOf(path)
-          const name = nameOf(path)
-          const existing = new Set((levelsRef.current[dir]?.entries ?? []).map((entry) => entry.name))
-          let candidate = copyNameOf(name)
-          for (let index = 2; existing.has(candidate) && index < 20; index += 1) {
-            const dot = name.lastIndexOf('.')
-            candidate = dot <= 0 ? `${name} 副本 ${index}` : `${name.slice(0, dot)} 副本 ${index}${name.slice(dot)}`
-          }
-          const target = `${dir}/${candidate}`
+          const target = `${dir}/${uniqueNameIn(dir, copyNameOf(nameOf(path)))}`
           const outcome = await postJson(COPY_URL, { from: path, to: target }, path)
           if (outcome === null) return
           if (!outcome.ok) {
@@ -2727,6 +2906,151 @@ window.__ModuleLoader__.load({
           }
           setSelected(target)
           await reloadDir(dir)
+        }
+
+        /** 换一块内部剪贴板：模块级那份是真相，`setClipboard` 只是让界面跟上。 */
+        const armClipboard = (next) => {
+          filesClipboard = next
+          setClipboard(next)
+        }
+
+        /** 「复制到剪贴板」：只收文件（目录不复制，与 Host 的 `copy` 路由同一口径）。 */
+        const copyToClipboard = (path) => {
+          setError(null)
+          armClipboard({ mode: 'copy', path, name: nameOf(path) })
+        }
+
+        /** 「剪切」：文件与目录都收（粘贴时走改名路由，也就是移动）。 */
+        const cutToClipboard = (path) => {
+          setError(null)
+          armClipboard({ mode: 'cut', path, name: nameOf(path) })
+        }
+
+        /**
+         * 把内部剪贴板里的东西贴进一个目录。
+         *
+         * 复制 → `copy` 路由（重名自动编号，剪贴板**保留**，可以连着贴好几处）；剪切 → `rename`
+         * 路由（重名直接报「目标已经存在」—— 移动悄悄改名比报错更糟），贴成功后清空剪贴板。
+         * @param dir - 目标目录的绝对路径。
+         * @returns 请求结束即返回。
+         */
+        const pasteClipboardInto = async (dir) => {
+          const clip = filesClipboard
+          if (clip === null) return
+          ensureDir(dir)
+          setExpanded((prev) => new Set(prev).add(dir))
+          if (clip.mode === 'cut') {
+            const moved = `${dir}/${clip.name}`
+            if (moved === clip.path) {
+              // 贴回原地：什么都不用做，剪贴板继续留着。
+              setSelected(moved)
+              return
+            }
+            const outcome = await postJson(RENAME_URL, { from: clip.path, to: moved }, clip.path)
+            if (outcome === null) return
+            if (!outcome.ok) {
+              setError(describeMutationFailure(outcome, t))
+              return
+            }
+            armClipboard(null)
+            setSelected(moved)
+            await reloadDir(parentOf(clip.path))
+            if (dir !== parentOf(clip.path)) await reloadDir(dir)
+            return
+          }
+          const target = `${dir}/${uniqueNameIn(dir, clip.name)}`
+          const outcome = await postJson(COPY_URL, { from: clip.path, to: target }, clip.path)
+          if (outcome === null) return
+          if (!outcome.ok) {
+            setError(describeMutationFailure(outcome, t))
+            return
+          }
+          setSelected(target)
+          await reloadDir(dir)
+        }
+
+        /**
+         * 把一批文件贴（上传）进一个目录：逐个读成字节 → base64 → 打上传路由。
+         *
+         * 名字先按目录里已有的条目编号；超过上限的文件跳过并说明，剩下的继续贴（一个 5 MiB 的
+         * 截图不该把同一次粘贴里其它几个文件一起废掉）。
+         * @param dir - 目标目录的绝对路径。
+         * @param files - `File` 列表。
+         * @returns 全部处理完即返回。
+         */
+        const uploadInto = async (dir, files) => {
+          ensureDir(dir)
+          setExpanded((prev) => new Set(prev).add(dir))
+          let last = null
+          let failure = null
+          for (const file of files) {
+            if (file.size > MAX_PASTE_BYTES) {
+              failure = t('files.paste.tooLarge', { name: file.name, limit: '4 MiB' })
+              continue
+            }
+            let data
+            try {
+              data = base64OfBytes(new Uint8Array(await file.arrayBuffer()))
+            } catch {
+              failure = t('files.paste.readFailed', { name: file.name })
+              continue
+            }
+            const name = uniqueNameIn(dir, file.name === '' ? pastedNameFor(file.type, 1) : file.name)
+            const target = `${dir}/${name}`
+            const outcome = await postJson(UPLOAD_URL, { path: target, data }, target)
+            if (outcome === null) return
+            if (!outcome.ok) {
+              failure = describeMutationFailure(outcome, t)
+              continue
+            }
+            last = target
+          }
+          if (last !== null) setSelected(last)
+          await reloadDir(dir)
+          if (failure !== null) setError(failure)
+        }
+
+        /**
+         * 「粘贴」的按钮 / 菜单入口：内部剪贴板优先，空了才去系统剪贴板里找文件。
+         *
+         * 这里必须用 `navigator.clipboard.read()`，它**拿不到文件名**（剪贴板条目不携带名字），
+         * 所以这条路读到的文件按 MIME 起名；想保住原名的粘贴走键盘 Ctrl/Cmd+V ——
+         * `paste` 事件里的 `clipboardData` 是带名字的。
+         * @param dir - 目标目录的绝对路径。
+         * @returns 请求结束即返回。
+         */
+        const pasteInto = async (dir) => {
+          setError(null)
+          if (filesClipboard !== null) {
+            await pasteClipboardInto(dir)
+            return
+          }
+          if (navigator.clipboard?.read === undefined) {
+            setError(t('files.paste.unsupported'))
+            return
+          }
+          let items
+          try {
+            items = await navigator.clipboard.read()
+          } catch {
+            setError(t('files.paste.denied'))
+            return
+          }
+          const files = []
+          let index = 0
+          for (const item of items) {
+            // 一个条目可能同时带 `text/plain`（复制富文本时）；取第一个非文本类型当文件。
+            const type = item.types.find((value) => !value.startsWith('text/'))
+            if (type === undefined) continue
+            index += 1
+            const blob = await item.getType(type)
+            files.push(new File([blob], pastedNameFor(type, index), { type }))
+          }
+          if (files.length === 0) {
+            setError(t('files.paste.empty'))
+            return
+          }
+          await uploadInto(dir, files)
         }
 
         /** 移动一个条目（拖拽落点）：目标已存在时由 Host 拒绝，不静默覆盖。 */
@@ -3005,10 +3329,38 @@ window.__ModuleLoader__.load({
         // 工具条上的动作落在「选中的是目录 → 它自己；选中的是文件 → 它的父目录」上。
         const targetDir = selected !== null && isDirPath(selected) ? selected : parentOf(selected ?? root)
 
+        /**
+         * 键盘 Ctrl/Cmd+V 落在面板里：内部剪贴板优先，否则把系统剪贴板里的**文件**贴进来。
+         *
+         * 纯文本一律不拦（`preventDefault` 都不调），留给浏览器默认行为 —— 往这棵树里贴文本没有
+         * 去处，硬造一个文件属于另一种需求。目录则明确说一句：浏览器读不到目录内容，只能不支持。
+         * @param event - `paste` 事件。
+         * @returns 无。
+         */
+        const onPasteEvent = (event) => {
+          if (event.target?.tagName === 'INPUT') return
+          if (filesClipboard !== null) {
+            event.preventDefault()
+            void pasteClipboardInto(targetDir)
+            return
+          }
+          const { files, directories } = clipboardFilesOf(event.clipboardData)
+          if (files.length === 0) {
+            if (directories.length > 0) {
+              event.preventDefault()
+              setError(t('files.paste.directory', { name: directories[0] }))
+            }
+            return
+          }
+          event.preventDefault()
+          void uploadInto(targetDir, files)
+        }
+
         return h('div', {
           className: 'dsh-wef-root',
           'data-workspace-editor-files': 'ready',
           'data-workspace-editor-files-root': root,
+          onPaste: onPasteEvent,
         },
         h('style', null, CSS),
         h('div', { className: 'dsh-wef-bar' },
@@ -3030,6 +3382,14 @@ window.__ModuleLoader__.load({
             disabled: busy !== null,
             onClick: () => { startCreate(targetDir, 'folder') },
           }, glyph('newFolder')),
+          h('button', {
+            type: 'button',
+            className: 'dsh-wef-tool',
+            title: t('files.paste'),
+            'data-workspace-editor-files-paste': targetDir,
+            disabled: busy !== null,
+            onClick: () => { void pasteInto(targetDir) },
+          }, glyph('paste')),
           h('button', {
             type: 'button',
             className: 'dsh-wef-tool',
@@ -3087,13 +3447,26 @@ window.__ModuleLoader__.load({
         h('div', {
           className: 'dsh-wef-body',
           tabIndex: 0,
+          ref: bodyRef,
           'data-drop': dropOn === root ? 'true' : 'false',
-          // F2 = 重命名当前选中行（VS Code 的习惯）；Esc 收起一切浮层。输入框里的按键归输入框自己管。
+          // F2 = 重命名当前选中行（VS Code 的习惯）；Ctrl/Cmd+C/X = 把选中行放进内部剪贴板
+          // （Ctrl/Cmd+V 走 `paste` 事件，见根节点上的 onPaste）；Esc 收起一切浮层。
+          // 输入框里的按键归输入框自己管。
           onKeyDown: (event) => {
             if (event.target?.tagName === 'INPUT') return
             if (event.key === 'F2' && selected !== null && selected !== root) {
               event.preventDefault()
               startRename(selected)
+              return
+            }
+            if ((event.ctrlKey || event.metaKey) && (event.key === 'c' || event.key === 'x')) {
+              if (selected === null || selected === root) return
+              const directory = isDirPath(selected)
+              // 目录不复制（Host 的 copy 只收普通文件），但可以剪切（粘贴时是改名 / 移动）。
+              if (event.key === 'c' && directory) return
+              event.preventDefault()
+              if (event.key === 'c') copyToClipboard(selected)
+              else cutToClipboard(selected)
               return
             }
             if (event.key === 'Escape') {
@@ -3135,8 +3508,28 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dsh-wef-menu-sep', key: 'sep' }),
         menuItem('rename', 'rename', menu.path, t('files.rename'), () => { startRename(menu.path) }, false),
         menuItem('copy', 'copy', menu.path, t('files.copy'), () => { void copyEntry(menu.path) }, menu.type !== 'file'),
+        menuItem('copy-to', 'copy', menu.path, t('files.copyTo'), () => { copyToClipboard(menu.path) }, menu.type !== 'file'),
+        menuItem('cut-to', 'cut', menu.path, t('files.cut'), () => { cutToClipboard(menu.path) }, false),
+        menuItem('paste', 'paste', menu.path, t('files.paste'), () => { void pasteInto(menu.path) }, menu.type !== 'directory'),
         menuItem('delete', 'trash', menu.path, t('files.delete'), () => { void armDelete(menu.path, menu.type) }, false, true)),
         busy !== null && h('p', { className: 'dsh-wef-status', 'data-workspace-editor-files-busy': '' }, t('files.busy')),
+        // 剪贴板横幅：不是「正在处理」，而是「贴的时候会贴什么」，所以单独一行、带一个清空按钮。
+        clipboard !== null && h('p', {
+          className: 'dsh-wef-clip',
+          'data-workspace-editor-files-clipboard': clipboard.path,
+          'data-workspace-editor-files-clipboard-mode': clipboard.mode,
+        },
+        h('span', { className: 'dsh-wef-clip-name' },
+          t('files.clipboard', {
+            name: clipboard.name,
+            mode: t(clipboard.mode === 'cut' ? 'files.clipboardMode.cut' : 'files.clipboardMode.copy'),
+          })),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-workspace-editor-files-clipboard-clear': '',
+          onClick: () => { armClipboard(null) },
+        }, t('files.clipboardClear'))),
         h(FilesFooter, null))
       }
 

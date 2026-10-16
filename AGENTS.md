@@ -6,10 +6,10 @@
 
 ## 项目是什么
 
-`@dongasai/dsh-editor` —— DSH 插件，一个包两半：**Host 半边** [index.js](index.js) 注册五条变更
-路由（`/workspace-editor/` 下的 `write` / `delete` / `mkdir` / `rename` / `copy`）；**浏览器半边**
-[client.js](client.js) 在右侧栏注册可编辑的文档渲染器、一个编辑器页签类型、预览头部的「✎ 编辑」
-与「🗑 删除」按钮，以及一个自带文件树的工具面板 **「文件编辑」**。
+`@dongasai/dsh-editor` —— DSH 插件，一个包两半：**Host 半边** [index.js](index.js) 注册六条变更
+路由（`/workspace-editor/` 下的 `write` / `delete` / `mkdir` / `rename` / `copy` / `upload`）；
+**浏览器半边** [client.js](client.js) 在右侧栏注册可编辑的文档渲染器、一个编辑器页签类型、预览
+头部的「✎ 编辑」与「🗑 删除」按钮，以及一个自带文件树、自带剪贴板的工具面板 **「文件编辑」**。
 
 三句话概括设计：变更走**自注册的 HTTP 路由**（新增 Remote 命名空间需要构建期生成物，`link:`
 安装走不通）；三档入口（默认渲染器 / 可选渲染器 / 编辑器页签）**共用同一份正文**，「文件编辑」
@@ -43,8 +43,8 @@
 
 | 文件 | 作用 |
 |---|---|
-| [index.js](index.js) | Host 半边全部实现：五条路由共用外壳 + 三道闸 + 版本闸 + `node:fs` 的 errno 映射 |
-| [client.js](client.js) | 浏览器半边全部实现：三档入口 + `EditorSurface` + 语法高亮层与令牌表 + 删除按钮 + 「文件编辑」文件树面板 + 右键「发送到 DSH」 |
+| [index.js](index.js) | Host 半边全部实现：六条路由共用外壳 + 三道闸 + 版本闸 + `node:fs` 的 errno 映射 + base64 线性校验 |
+| [client.js](client.js) | 浏览器半边全部实现：三档入口 + `EditorSurface` + 语法高亮层与令牌表 + 删除按钮 + 「文件编辑」文件树面板（含剪贴板 / 粘贴）+ 右键「发送到 DSH」 |
 | [cordis.patch.yml](cordis.patch.yml) | 插进 profile 的那一行 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client`（`platform` / `immediately` / `inject`） |
 | [locale/zh.json](locale/zh.json) / [locale/en.json](locale/en.json) | 插件列表里的标题与描述 |
@@ -53,27 +53,32 @@
 | [IMPLEMENTATION.md](IMPLEMENTATION.md) | **为什么**：设计决策、一次保存 / 删除的路径、四条约束 |
 | [AGENTS.md](AGENTS.md) | 本文件：命令、约束清单、改动连带项 |
 
-`index.js` 内部顺序：常量（含五条路由的 `ENDPOINTS` 表）→ `FS_FAILURES` / `NODE_FAILURES` 码表
-→ `name` / `inject` → `apply`（按表注册五条路由）→ `route`（五条共用的外壳）→ `rejected`
-（信任围栏）→ `requestLifetime`（断连 + 墙钟）→ 五个 `parse*Request` → `writeWorkspaceFile`
-（lstat → resolve/contains → sandboxPolicy → writeText）→ `deleteWorkspaceEntry` /
-`mkdirWorkspaceEntry` / `renameWorkspaceEntry` / `copyWorkspaceEntry` → `guardMutation`（会话根 →
+`index.js` 内部顺序：常量（含六条路由的 `ENDPOINTS` 表、`isBase64`）→ `FS_FAILURES` /
+`NODE_FAILURES` 码表 → `name` / `inject` → `apply`（按表注册六条路由）→ `route`（六条共用的
+外壳）→ `rejected`（信任围栏）→ `requestLifetime`（断连 + 墙钟）→ 六个 `parse*Request` →
+`writeWorkspaceFile`（lstat → resolve/contains → sandboxPolicy → writeText）→
+`deleteWorkspaceEntry` / `mkdirWorkspaceEntry` / `renameWorkspaceEntry` / `copyWorkspaceEntry` /
+`uploadWorkspaceFile` → `guardMutation`（会话根 →
 contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirectory` → `removeEntry` /
 `makeEntryDirectory` / `moveEntry` / `copyEntry` → `nodeFailure`（errno → 线上码）→
 `resolveSessionRoot` → `readBody` → `sendFailure` → 若干纯工具函数。
 
-`client.js` 内部顺序：常量（`WRITE_URL` / `DELETE_URL` / 两个扩展名表 / 三个 id /
-`EDITOR_TAB_PATTERN` / 模块级 `drafts` / `inputTargets` / `CSS`）→ 文案 `zh` / `en` → 地址与纯工具
+`client.js` 内部顺序：常量（`WRITE_URL` / `DELETE_URL` / `MKDIR_URL` / `RENAME_URL` / `COPY_URL` /
+`UPLOAD_URL` / `MAX_PASTE_BYTES` / 两个扩展名表 / 三个 id / `EDITOR_TAB_PATTERN` / 模块级 `drafts` /
+`inputTargets` / `filesClipboard` / `CSS`）→ 文案 `zh` / `en` → 地址与纯工具
 （`addressParts` / `parseSessionFileAddress` / `absoluteFileAddress` / `fileNameOf` / `paneTarget` /
 `relativizeToCwd` / `lineNumberOf` / `lineReferenceToken` / `menuAnchorFor` / `sessionCwd` /
-`writeClipboard` / `readClipboard`）→ **语法高亮区**（`/* highlight:start */` …
+`writeClipboard` / `readClipboard`）→ **粘贴纯函数区**（`/* paste:start */` …
+`/* paste:end */`：`PASTE_EXTENSIONS` / `base64OfBytes` / `pastedNameFor` / `clipboardFilesOf`）→
+**语法高亮区**（`/* highlight:start */` …
 `/* highlight:end */`：上限常量 / 高亮名映射 / 关键字表 / 各语言规则表 / `keywordSource` /
 `clikeRules` / `makeScanner` / `scannerFor` / `languageOfPath` / `normalizeNewlines` /
 `needsTrailingLine` / `highlightRegistry` / `highlightSupported` / `tokenize`）→
 `HIGHLIGHT_API_SUPPORTED` + `applyHighlights` / `releaseHighlights` / `rebuildHighlights`（DOM 侧，
 Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵）→
 `createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` / `EditAction` / `DeleteAction`）
-→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`）→ `inject` + `apply`（编辑 / 删除按钮注册在
+→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`：目录树 + 内部剪贴板 / 系统剪贴板粘贴）→
+`inject` + `apply`（编辑 / 删除按钮注册在
 同一个槽位，id 与 order 各一档；「文件编辑」是页签类型 + `sidebar.right.pane.tab` 正文 + 快捷键
 + 输入框哨兵）。
 
@@ -87,22 +92,24 @@ Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵�
    判别（查 `FS_FAILURES` 表），不 import 官方包，也不导出 `Config`（那需要 schemastery）。
 2. **变更必须过三道闸**：Connection 信任围栏（`ctx.connection.requestRejection`）→ 会话工作区
    包含性检查（`ctx.fs.contains`）→ 沙箱策略围栏。写路径的第三道闸由 `ctx.fs.writeText` 执行；
-   **另外四条没有这层自动保护**（`ctx.fs` 没有删除 / 改名 / 建目录 / 复制的接口，它们走
-   `node:fs`），必须走 `guardMutation()` 自己按 `policy.mode === 'read-only'` 拒绝。**不要为了
-   「方便保存 / 方便删除」放宽任何一道**，也不要拿掉 `entryNoFollow()` 的符号链接检查（这四条
-   既不递归跟软链，也不删 / 改软链指向的东西）。
+   **另外五条没有这层自动保护**（`ctx.fs` 没有删除 / 改名 / 建目录 / 复制 / 写二进制的接口，它们
+   走 `node:fs`），必须走 `guardMutation()` 自己按 `policy.mode === 'read-only'` 拒绝。**不要为了
+   「方便保存 / 方便删除 / 方便粘贴」放宽任何一道**，也不要拿掉 `entryNoFollow()` 的符号链接
+   检查（这五条既不递归跟软链，也不删 / 改软链指向的东西）。
 3. **破坏性变更带版本闸，覆盖性变更带排他**：写 `expectedVersion` → `{ kind: 'replaceIfVersion' }`
    （`create` 走 `createIfAbsent`）；删在落盘前逐字比对同一个版本令牌；改名卡「目标必须不存在」；
-   复制用 `COPYFILE_EXCL`。不传 `expectedVersion` 才是无条件变更（只允许发生在用户点过
-   「覆盖保存」/「仍然删除」之后）。
+   复制用 `COPYFILE_EXCL`、粘贴上传用 `writeFile` 的 `wx`。不传 `expectedVersion` 才是无条件变更
+   （只允许发生在用户点过「覆盖保存」/「仍然删除」之后）。
 4. **不改观察状态**：不 `emit('fs/observed', …)`。人工在 GUI 里改过的文件对模型来说必须仍是
    「没读过」。
 5. **错误按 `code` 判别，绝不看 `message`**；表里没有的码一律 500 并记日志（写 `write-failed`，
-   四条 `node:fs` 路由各有 `*-failed`），不要新增「猜」的分支。
-6. **四条 `node:fs` 路由的每一步都过公共前置**：`guardMutation()`（会话根 → `contains` →
+   五条 `node:fs` 路由各有 `*-failed`），不要新增「猜」的分支。`upload` 的 base64 校验**不许用
+   大正则**（`(?:…{4})*` 套在 4 MiB 字符串上会把 V8 的 regexp 栈撑爆，见 `isBase64` 的注释）。
+6. **五条 `node:fs` 路由的每一步都过公共前置**：`guardMutation()`（会话根 → `contains` →
    自己判 `read-only`）→ `entryNoFollow()`（软链一律拒）→ `requireParentDirectory()`（目标父级
-   必须存在且是目录）→ 才轮到 `unlink` / `rmdir` / `rm -r` / `mkdir` / `rename` / `copyFile`。
-   删除带版本闸、复制带 `COPYFILE_EXCL`、改名卡「目标必须不存在」—— 这三条不要互相「统一」掉。
+   必须存在且是目录）→ 才轮到 `unlink` / `rmdir` / `rm -r` / `mkdir` / `rename` / `copyFile` /
+   `writeFile`。删除带版本闸、复制带 `COPYFILE_EXCL`、粘贴上传带 `wx`、改名卡「目标必须不存在」
+   —— 这几条不要互相「统一」掉。
 
 ### 浏览器半边
 
@@ -124,7 +131,7 @@ Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵�
     否则按钮消失、用户连重试都点不到）；删成功用 `closeTarget` 关掉点击时捕获的那张页签。
 14. **「文件编辑」面板是页类型，不是新槽位**：`sidebarRightTabs.register`（无 patterns，只能按
     kind 打开）+ `sidebar.right.pane.tab` 同 id 的正文；列表 / 监听只用官方只读 Remote
-    （`list` / `stat` / `changes` 走受管 `$stream`），变更一律打插件自己的五条路由。树的面板
+    （`list` / `stat` / `changes` 走受管 `$stream`），变更一律打插件自己的六条路由。树的面板
     **单击文件开编辑器页签时必须带 `paneId` 且不带 `replaceTab`** —— 否则一点文件就把面板自己
     顶掉了。
 15. **树的状态都在组件里，不要把目录树塞进模块级缓存**：换会话 / 换工作区根靠外层 `key` 重挂，
@@ -168,6 +175,16 @@ Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵�
     自己**必需**的服务（`remote.workspaceFiles` 是编辑器读盘必需的）；可选的（如
     `remote.pluginManager`）一律 `ctx.get(...)`，拿不到就退回兜底表现。
 
+21. **粘贴是「两个来源、一场两路」，别把它统一成一条**：内部剪贴板（`filesClipboard`，模块级 ——
+    这是约束 15 的唯一例外，它跟草稿一样要活过重挂）优先，走已有的复制 / 改名路由（剪切贴完
+    必须清空，复制贴完保留）；没有内部剪贴板时才去系统剪贴板拿文件，走 `POST /upload`。
+    系统剪贴板那两条路的差别是**信息和能力不一样，不是实现偷懒**：
+    - 键盘 **Ctrl/Cmd+V** 只能走 `paste` 事件（`clipboardData` 带**真文件名**）；
+    - 菜单 / 工具条上的「粘贴」只能走 `navigator.clipboard.read()` —— 它**不携带文件名**，
+      只能按 MIME 起名（`pasted-<时间戳>.<扩展名>`），且需要安全上下文与权限。
+    另外：`paste` 事件里**纯文本一律 `return`（不 `preventDefault`）**，目录要明确说「不支持」
+    （浏览器拿得到目录入口、拿不到内容）—— 别顺手把它做成「贴文本建文件」，那是另一个需求。
+
 ## 代码风格
 
 - 中文 JSDoc（`@param` / `@returns` / `@throws`）；注释解释**为什么** —— 尤其是反直觉的取舍
@@ -196,6 +213,13 @@ node --check client.js
 归属；几何部分（高亮层与 textarea 逐字符坐标一致、wrap 开 / 关、滚到底部）只能在浏览器里量 ——
 用真 React 把真 `client.js` 挂到无头 Chrome 里，拿 textarea 的镜像逐点比坐标。
 
+动了粘贴：`/* paste:start */` … `/* paste:end */` 之间同样是**纯函数**（`base64OfBytes` /
+`pastedNameFor` / `clipboardFilesOf` / `PASTE_EXTENSIONS`），整段截出来在 Node 里断言「与
+`Buffer` 的 base64 逐例一致（含 0x8000 分块边界）」「无名文件的命名」「从 `ClipboardEvent` 里
+挑文件 / 认目录」。组件那一层（菜单、Ctrl+C/X/V、工具条、剪贴板横幅）用**真 jsdom + 真 React**
+把真 `client.js` 挂起来跑同一份断言脚本；本机 Chrome 在 DSH 的 bwrap 沙箱里起不来，真浏览器 +
+真系统剪贴板那一段只能走 README 的手工清单。
+
 命令行能覆盖的注册断言（`cordis_inspect_list` → `cordis_inspect_query`：Host `Config.listConfigs`
 查 Loader 行，Client `Slots.listSubTree` 查槽位占用；外加无认证 POST 被拒、`GET` 得 405）与
 浏览器侧的手工清单都在 README「怎么验证」里，两处都要走一遍；**动了 `client.js` 的交互就必须在
@@ -213,7 +237,8 @@ node --check client.js
   「哪些文件能进编辑器」表与「怎么用」第 2 步。
 - 动线上协议（路由路径、字段、错误码、上限）→ 同步 README 的「线上协议」整节、`FS_FAILURES` /
   `NODE_FAILURES` 表与 [client.js](client.js) 里 `WRITE_URL` / `DELETE_URL` / `MKDIR_URL` /
-  `RENAME_URL` / `COPY_URL` 的注释；两边路径必须逐字一致。
+  `RENAME_URL` / `COPY_URL` / `UPLOAD_URL` 的注释；两边路径必须逐字一致，客户端
+  `MAX_PASTE_BYTES` 与 Host `MAX_UPLOAD_BYTES` 也必须同值。
 - 动保存 / 冲突 / 草稿逻辑 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「数据不丢的四条
   规矩」；动删除按钮的状态机 → 同步同文件的「规矩 4：删除要两次点击」；动「文件编辑」面板 →
   同步同文件的「「文件编辑」面板：浏览器侧的设计」。
@@ -227,13 +252,18 @@ node --check client.js
   的 …」那一行。推完用 `git ls-remote origin` 核对 `refs/heads/main` 与 `refs/tags/<tag>^{}`
   指向同一个提交。面板页脚不用动 —— 它从 Host 插件清单现读 `version`。
 - 动 Host 侧的闸 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「一次保存的完整路径」
-  （五条路由那张图）、「删除 / 改名 / 建目录 / 复制为什么走 `node:fs`」与「四条实现约束」。
+  （六条路由那张图）、「删除 / 改名 / 建目录 / 复制 / 粘贴上传为什么走 `node:fs`」与
+  「四条实现约束」。
+- 动粘贴 / 剪贴板 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「「文件编辑」面板：浏览器侧
+  的设计」里那条粘贴说明与 README 的排错表 / 已知边界 / 手工清单。
 - 已知边界（1 MiB 编辑上限、高亮 256 KiB / 2 万令牌上限与 Custom Highlight API 前提、
   面板页脚的插件信息依赖 Host 的插件清单（读不到就只显示包名）、没有行号 /
   查找替换 / 多文件、页签顶替而非就地切换、官方文件树仍只读、
   删除永久且带毫秒级窗口、面板不做多选 / 不复制目录 / 不递归建中间目录、改名的预检窗口、递归
   删除只盖直接条目、`link:` 下 Host 半边要重启、草稿只在内存里、发送的是纯文本引用而非芯片、
-  发送目标恒为当前会话、右键菜单替代原生文本框菜单、插入不聚焦输入框）写在 README 末尾；
+  发送目标恒为当前会话、右键菜单替代原生文本框菜单、插入不聚焦输入框、
+  粘贴只收文件且单个 4 MiB 上限、纯文本粘贴不处理、剪贴板里的目录不支持、菜单那条粘贴路丢失
+  文件名、内部剪贴板只在内存里且换会话粘贴会被 403 挡下）写在 README 末尾；
   **没真正解决之前不要从文档里删掉**。
 - **文档分工别混**：README 只回答「怎么用」（用户视角的问题进排错表 / 已知边界），
   IMPLEMENTATION 只回答「为什么」；别让 README 重新长出实现细节。
