@@ -252,6 +252,7 @@ window.__ModuleLoader__.load({
 .dsh-wef-banner{flex:none;display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;background:var(--dsw-alias-bg-layer-2);border-bottom:.5px solid var(--dsw-alias-border-l1)}
 .dsh-wef-banner[data-tone="error"]{color:var(--dsw-alias-state-error-primary)}
 .dsh-wef-banner[data-tone="warn"]{color:var(--dsw-alias-state-warn-primary)}
+.dsh-wef-banner[data-tone="ok"]{color:var(--dsw-alias-state-success-primary)}
 .dsh-wef-banner-text{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
 .dsh-wef-body{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 4px 12px;scrollbar-gutter:stable}
 .dsh-wef-body[data-drop="true"]{background:var(--dsw-alias-bg-layer-2)}
@@ -371,6 +372,10 @@ window.__ModuleLoader__.load({
       'files.paste.directory': '「{name}」是目录：剪贴板粘贴只支持文件，目录请用拖拽或改名移动。',
       'files.paste.tooLarge': '「{name}」超过 {limit}，没有粘贴。',
       'files.paste.readFailed': '「{name}」读不出来，没有粘贴。',
+      'files.copyPath': '复制路径',
+      'files.copyPathRelative': '复制相对路径',
+      'files.copyPath.done': '已复制：{path}',
+      'files.copyPath.failed': '浏览器不让写剪贴板，路径没有复制。手动选中再复制吧。',
       'delete.stale': '文件已变更，未删除',
       'delete.noVersion': '读不到文件状态',
       'conflict.stale': '磁盘上的文件在编辑期间变过，尚未覆盖。',
@@ -477,6 +482,10 @@ window.__ModuleLoader__.load({
       'files.paste.directory': '"{name}" is a folder: clipboard paste only handles files; move folders by dragging or renaming.',
       'files.paste.tooLarge': '"{name}" is over {limit}; nothing was pasted.',
       'files.paste.readFailed': '"{name}" could not be read; nothing was pasted.',
+      'files.copyPath': 'Copy path',
+      'files.copyPathRelative': 'Copy relative path',
+      'files.copyPath.done': 'Copied: {path}',
+      'files.copyPath.failed': 'The browser refused clipboard access; the path was not copied.',
       'delete.stale': 'File changed, not deleted',
       'delete.noVersion': 'File state unavailable',
       'conflict.stale': 'The file changed on disk while you were editing; nothing was overwritten.',
@@ -850,6 +859,7 @@ window.__ModuleLoader__.load({
         'M10 11.7a1.6 1.6 0 1 0 3.2 0 1.6 1.6 0 1 0-3.2 0',
       ],
       paste: ['M4.6 3.8h6.8v9.6H4.6z', 'M6.6 3.8V2.4h2.8v1.4', 'M6.4 7.2h3.2', 'M6.4 9.6h3.2'],
+      path: ['M5.6 3 10.4 13', 'M3.2 6.2h.01', 'M12.8 9.8h.01'],
       trash: ['M2.8 4.6h10.4', 'M6.3 4.6V2.9h3.4v1.7', 'M4.4 4.6l.7 9.1h5.8l.7-9.1'],
       refresh: ['M13 8a5 5 0 1 1-1.7-3.7', 'M13.3 2.6v3.2h-3.2'],
       open: ['M2.5 12.5V6h6.5l-2.4 2.4', 'M6.6 3.5h6v6'],
@@ -2412,6 +2422,9 @@ window.__ModuleLoader__.load({
     /** 变更帧到达后合并成一次重列的等待时间（毫秒）。 */
     const WATCH_DEBOUNCE_MS = 120
 
+    /** 一次性提示（「已复制路径」这类没有落盘副作用的回话）在屏幕上留多久。 */
+    const NOTICE_MS = 6000
+
     /** 读到的插件信息（读到才缓存；读不到不缓存，下次开面板再试）。 */
     let pluginInfoValue = null
 
@@ -2612,6 +2625,8 @@ window.__ModuleLoader__.load({
         const [pending, setPending] = React.useState(null)
         const [busy, setBusy] = React.useState(null)
         const [error, setError] = React.useState(null)
+        /** 一次性提示：`{ text, tone }`；成功色、几秒后自己消失（复制路径这种动作只在这里回话）。 */
+        const [notice, setNotice] = React.useState(null)
         const [dropOn, setDropOn] = React.useState(null)
         /** 右键菜单：`{ path, type, x, y }`；坐标是视口坐标（菜单用 position:fixed）。 */
         const [menu, setMenu] = React.useState(null)
@@ -2633,12 +2648,14 @@ window.__ModuleLoader__.load({
         const reloadTimers = React.useRef(new Map())
         const dragRef = React.useRef(null)
         const reloadRef = React.useRef(null)
+        const noticeTimer = React.useRef(null)
 
         // 卸载：停掉观察流、清掉节流计时器、中止在飞的读盘。
         React.useEffect(() => () => {
           aliveRef.current = false
           controllerRef.current?.abort()
           for (const timer of reloadTimers.current.values()) clearTimeout(timer)
+          if (noticeTimer.current !== null) clearTimeout(noticeTimer.current)
           for (const stop of watchers.current.values()) void stop()
           watchers.current.clear()
         }, [])
@@ -2906,6 +2923,45 @@ window.__ModuleLoader__.load({
           }
           setSelected(target)
           await reloadDir(dir)
+        }
+
+        /**
+         * 亮一条一次性提示。
+         *
+         * 「复制路径」这类动作对文件系统没有任何副作用，用它自己的成功横幅回话就够；几秒后自己
+         * 消失（`NOTICE_MS`），不用用户去点掉。
+         * @param text - 已经本地化好的文本。
+         * @param tone - `ok` | `warn` | `error`。
+         * @returns 无。
+         */
+        const showNotice = (text, tone) => {
+          if (noticeTimer.current !== null) clearTimeout(noticeTimer.current)
+          setNotice({ text, tone })
+          noticeTimer.current = setTimeout(() => {
+            noticeTimer.current = null
+            if (aliveRef.current) setNotice(null)
+          }, NOTICE_MS)
+        }
+
+        /**
+         * 把一条路径写进系统剪贴板（右键菜单里的「复制路径 / 复制相对路径」）。
+         *
+         * 相对路径是相对**这个面板的根**（也就是会话工作区根）算的，分隔符沿用磁盘上的写法；
+         * 根自己用 `.` 表示 —— 回一个绝对路径会让人以为「相对路径没生效」。
+         * 写剪贴板失败（非安全上下文、权限被拒、浏览器没有 clipboard API 且 `execCommand` 也不行）
+         * 时走错误横幅：这条动作唯一的结果就是剪贴板，静默失败等于什么都没发生。
+         * @param path - 这一行的绝对路径。
+         * @param relative - true 复制相对工作区根的路径。
+         * @returns 无。
+         */
+        const copyPath = async (path, relative) => {
+          const text = relative ? (path === root ? '.' : relativizeToCwd(path, root)) : path
+          const written = await writeClipboard(text)
+          if (!written) {
+            setError(t('files.copyPath.failed'))
+            return
+          }
+          showNotice(t('files.copyPath.done', { path: text }), 'ok')
         }
 
         /** 换一块内部剪贴板：模块级那份是真相，`setClipboard` 只是让界面跟上。 */
@@ -3418,6 +3474,18 @@ window.__ModuleLoader__.load({
           'data-workspace-editor-files-dismiss': '',
           onClick: () => { setError(null) },
         }, t('files.cancel'))),
+        notice !== null && h('p', {
+          className: 'dsh-wef-banner',
+          'data-tone': notice.tone,
+          'data-workspace-editor-files-notice': '',
+        },
+        h('span', { className: 'dsh-wef-banner-text' }, notice.text),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-workspace-editor-files-notice-dismiss': '',
+          onClick: () => { setNotice(null) },
+        }, t('files.cancel'))),
         pending !== null && h('p', {
           className: 'dsh-wef-banner',
           'data-tone': 'warn',
@@ -3511,6 +3579,9 @@ window.__ModuleLoader__.load({
         menuItem('copy-to', 'copy', menu.path, t('files.copyTo'), () => { copyToClipboard(menu.path) }, menu.type !== 'file'),
         menuItem('cut-to', 'cut', menu.path, t('files.cut'), () => { cutToClipboard(menu.path) }, false),
         menuItem('paste', 'paste', menu.path, t('files.paste'), () => { void pasteInto(menu.path) }, menu.type !== 'directory'),
+        h('div', { className: 'dsh-wef-menu-sep', key: 'sep-paths' }),
+        menuItem('copy-path', 'path', menu.path, t('files.copyPath'), () => { void copyPath(menu.path, false) }, false),
+        menuItem('copy-path-relative', 'path', menu.path, t('files.copyPathRelative'), () => { void copyPath(menu.path, true) }, false),
         menuItem('delete', 'trash', menu.path, t('files.delete'), () => { void armDelete(menu.path, menu.type) }, false, true)),
         busy !== null && h('p', { className: 'dsh-wef-status', 'data-workspace-editor-files-busy': '' }, t('files.busy')),
         // 剪贴板横幅：不是「正在处理」，而是「贴的时候会贴什么」，所以单独一行、带一个清空按钮。

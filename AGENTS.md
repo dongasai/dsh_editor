@@ -44,7 +44,7 @@
 | 文件 | 作用 |
 |---|---|
 | [index.js](index.js) | Host 半边全部实现：六条路由共用外壳 + 三道闸 + 版本闸 + `node:fs` 的 errno 映射 + base64 线性校验 |
-| [client.js](client.js) | 浏览器半边全部实现：三档入口 + `EditorSurface` + 语法高亮层与令牌表 + 删除按钮 + 「文件编辑」文件树面板（含剪贴板 / 粘贴）+ 右键「发送到 DSH」 |
+| [client.js](client.js) | 浏览器半边全部实现：三档入口 + `EditorSurface` + 语法高亮层与令牌表 + 删除按钮 + 「文件编辑」文件树面板（含剪贴板 / 粘贴 / 复制路径）+ 右键「发送到 DSH」 |
 | [cordis.patch.yml](cordis.patch.yml) | 插进 profile 的那一行 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client`（`platform` / `immediately` / `inject`） |
 | [locale/zh.json](locale/zh.json) / [locale/en.json](locale/en.json) | 插件列表里的标题与描述 |
@@ -77,7 +77,8 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
 `HIGHLIGHT_API_SUPPORTED` + `applyHighlights` / `releaseHighlights` / `rebuildHighlights`（DOM 侧，
 Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵）→
 `createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` / `EditAction` / `DeleteAction`）
-→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`：目录树 + 内部剪贴板 / 系统剪贴板粘贴）→
+→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`：目录树 + 内部剪贴板 / 系统剪贴板粘贴 +
+菜单里的 `copyPath` / `showNotice`）→
 `inject` + `apply`（编辑 / 删除按钮注册在
 同一个槽位，id 与 order 各一档；「文件编辑」是页签类型 + `sidebar.right.pane.tab` 正文 + 快捷键
 + 输入框哨兵）。
@@ -256,6 +257,8 @@ node --check client.js
   「四条实现约束」。
 - 动粘贴 / 剪贴板 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「「文件编辑」面板：浏览器侧
   的设计」里那条粘贴说明与 README 的排错表 / 已知边界 / 手工清单。
+- 动 tree 的菜单动作（复制路径这类只写系统剪贴板的动作）→ 同样同步上面两处；菜单项一律走
+  `menuItem()` 一处声明，别只为右键菜单再写一份（约束 16）。
 - 已知边界（1 MiB 编辑上限、高亮 256 KiB / 2 万令牌上限与 Custom Highlight API 前提、
   面板页脚的插件信息依赖 Host 的插件清单（读不到就只显示包名）、没有行号 /
   查找替换 / 多文件、页签顶替而非就地切换、官方文件树仍只读、
@@ -263,7 +266,8 @@ node --check client.js
   删除只盖直接条目、`link:` 下 Host 半边要重启、草稿只在内存里、发送的是纯文本引用而非芯片、
   发送目标恒为当前会话、右键菜单替代原生文本框菜单、插入不聚焦输入框、
   粘贴只收文件且单个 4 MiB 上限、纯文本粘贴不处理、剪贴板里的目录不支持、菜单那条粘贴路丢失
-  文件名、内部剪贴板只在内存里且换会话粘贴会被 403 挡下）写在 README 末尾；
+  文件名、内部剪贴板只在内存里且换会话粘贴会被 403 挡下、复制相对路径的基准是工作区根且根
+  自己没有行）写在 README 末尾；
   **没真正解决之前不要从文档里删掉**。
 - **文档分工别混**：README 只回答「怎么用」（用户视角的问题进排错表 / 已知边界），
   IMPLEMENTATION 只回答「为什么」；别让 README 重新长出实现细节。
