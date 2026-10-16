@@ -64,13 +64,14 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
 `resolveSessionRoot` → `readBody` → `sendFailure` → 若干纯工具函数。
 
 `client.js` 内部顺序：常量（`WRITE_URL` / `DELETE_URL` / `MKDIR_URL` / `RENAME_URL` / `COPY_URL` /
-`UPLOAD_URL` / `MAX_PASTE_BYTES` / 两个扩展名表 / 三个 id / `EDITOR_TAB_PATTERN` / 模块级 `drafts` /
+`UPLOAD_URL` / `MAX_PASTE_BYTES` / 两个扩展名表 / 四个 id（默认渲染器、可选渲染器、编辑器页签、
+图片页签）/ `EDITOR_TAB_PATTERN` / `IMAGE_TAB_PATTERN` / 模块级 `drafts` /
 `inputTargets` / `filesClipboard` / `CSS`）→ 文案 `zh` / `en` → 地址与纯工具
 （`addressParts` / `parseSessionFileAddress` / `absoluteFileAddress` / `fileNameOf` / `paneTarget` /
 `relativizeToCwd` / `lineNumberOf` / `lineReferenceToken` / `menuAnchorFor` / `sessionCwd` /
 `writeClipboard` / `readClipboard`）→ **粘贴 / 终端命令纯函数区**（`/* paste:start */` …
 `/* paste:end */`：`PASTE_EXTENSIONS` / `base64OfBytes` / `pastedNameFor` / `clipboardFilesOf` /
-`shellQuotePath`）→
+`shellQuotePath` / `IMAGE_MEDIA_TYPES` / `imageMediaTypeOf`）→
 **语法高亮区**（`/* highlight:start */` …
 `/* highlight:end */`：上限常量 / 高亮名映射 / 关键字表 / 各语言规则表 / `keywordSource` /
 `clikeRules` / `makeScanner` / `scannerFor` / `languageOfPath` / `normalizeNewlines` /
@@ -79,8 +80,9 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
 Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵）→
 `createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` / `EditAction` / `DeleteAction`）
 → **两半共用的动作层**（`useNotice` 一次性提示状态机 / `copyPathText` / `copyPathToClipboard` /
-`directoryOfFile` / `openTerminalAt`+`sendCdInto`+`waitForTerminalTab`：编辑器菜单与文件树菜单
-同一份实现）→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`：目录树 + 内部剪贴板 /
+`directoryOfFile` / `openTerminalAt`+`sendCdInto`+`waitForTerminalTab`：编辑器菜单、文件树菜单、
+图片预览菜单三处同一份实现）→ `createImageBody(ctx)`（`ImageBody`：读字节 → Blob 对象 URL →
+适配 / 原始大小、元信息、右键菜单、解不开与读失败的出路；**核对官方那三个契约别变**）→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`：目录树 + 内部剪贴板 /
 系统剪贴板粘贴 + 菜单里的 `copyPath` / `openInTerminal`）→
 `inject` + `apply`（编辑 / 删除按钮注册在
 同一个槽位，id 与 order 各一档；「文件编辑」是页签类型 + `sidebar.right.pane.tab` 正文 + 快捷键
@@ -125,9 +127,10 @@ Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵�
    让 owner 的自动刷新陷入重读循环 —— 这条最容易被「顺手优化」掉。
 10. **磁盘变化不覆盖脏缓冲区**：只亮横幅，正文一个字都不动，由用户选「加载磁盘版本」还是
    「继续编辑」。
-11. **编辑器页签的 pattern 必须命中不了真实地址**（`dsh-resource://workspace-editor/**`）：
-    它一旦能命中，普通打开文件就会被抢走，官方预览从此进不来。显式打开不看 pattern，
-    所以这条不会挡住按钮。
+11. **编辑器页签（以及图片预览页签）的 pattern 必须命中不了真实地址**
+    （`dsh-resource://workspace-editor/**` / `dsh-resource://workspace-editor-image/**`）：
+    它们一旦能命中，普通打开文件就会被抢走，官方预览（包括官方那个图片渲染器）从此进不来。
+    显式打开不看 pattern，所以这两条不会挡住树里的单击。
 12. **`doc.version`（草稿基线，版本闸用）与 `doc.diskVersion`（磁盘现状，展示与冲突判定用）
     是两个字段**，不要合并。
 13. **删除按钮要两次点击**：第一下只进确认态、同时抓版本基线（按钮在这期间禁用显示「检查中…」），
@@ -264,7 +267,12 @@ node --check client.js
   的设计」里那条粘贴说明与 README 的排错表 / 已知边界 / 手工清单。
 - 动 tree 的菜单动作（复制路径这类只写系统剪贴板的动作）→ 同样同步上面两处；菜单项一律走
   `menuItem()` 一处声明，别只为右键菜单再写一份（约束 16）。
-- 动「复制路径 / 在终端打开」→ 它们是**两个面共用**的（编辑器右键菜单 + 文件树菜单），改共用层
+- 动图片预览 → 守住「**不注册文档渲染器**」这条：官方已有图片渲染器，接管它就是行为回归；
+  改的是页签类型 + `sidebar.right.pane.tab` 正文，并同步 README 的「图片预览」一节 / 手工清单 /
+  已知边界与 IMPLEMENTATION 的面板一节。动后缀表（`IMAGE_MEDIA_TYPES`）时顺带想一下
+  `EditAction` 的图片守卫（同表判定）。
+- 动「复制路径 / 在终端打开」→ 它们是**三个面共用**的（编辑器右键菜单 + 文件树菜单 + 图片预览
+  菜单），改共用层
   就别只改一边；两处的手工清单与锚点（树的 `[data-workspace-editor-files-notice]`、编辑器的
   `[data-workspace-editor-action-notice]`）都要同步。
 - 动「在终端打开」→ 先确认官方那三条契约没变（`remote.terminal.create` **没有 cwd**、
@@ -279,7 +287,9 @@ node --check client.js
   粘贴只收文件且单个 4 MiB 上限、纯文本粘贴不处理、剪贴板里的目录不支持、菜单那条粘贴路丢失
   文件名、内部剪贴板只在内存里且换会话粘贴会被 403 挡下、复制相对路径的基准是工作区根且根
   自己没有行、侧边栏终端一律从工作区根起步（所以「在终端打开」是开完替你敲一条 `cd`，且会往
-  shell 发一次输入）、自动 cd 的引号只保证 POSIX shell 与 PowerShell）写在 README 末尾；
+  shell 发一次输入）、自动 cd 的引号只保证 POSIX shell 与 PowerShell、图片预览只从本插件的
+  文件树进（官方渲染器不动）、tiff / heic 这类不做解码兜底、图片是整份读进内存）写在 README
+  末尾；
   **没真正解决之前不要从文档里删掉**。
 - **文档分工别混**：README 只回答「怎么用」（用户视角的问题进排错表 / 已知边界），
   IMPLEMENTATION 只回答「为什么」；别让 README 重新长出实现细节。

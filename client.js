@@ -176,6 +176,16 @@ window.__ModuleLoader__.load({
     /** 编辑器页签的 kind（`openResource(address, { kind })` 里用的名字）。 */
     const EDITOR_KIND = 'workspace-editor'
 
+    /**
+     * 图片预览页签的 kind / id / pattern。
+     *
+     * 与编辑器页签同一套做法：pattern 刻意**命中不了任何真实地址**（图片自动打开仍然归官方预览），
+     * 只有显式点名 kind 才开 —— 本插件的文件树就是这么开的。
+     */
+    const IMAGE_TAB_ID = '@dongasai/dsh-editor/image'
+    const IMAGE_KIND = 'workspace-editor-image'
+    const IMAGE_TAB_PATTERN = 'dsh-resource://workspace-editor-image/**'
+
     /** 未保存草稿，按 `会话 + 路径` 索引；切标签 / 关页签都会重挂正文，草稿要活过重挂。 */
     const drafts = new Map()
 
@@ -242,6 +252,10 @@ window.__ModuleLoader__.load({
 ::highlight(dsh-we-pun){color:var(--shiki-token-punctuation,var(--dsw-alias-label-secondary))}
 ::highlight(dsh-we-lnk){color:var(--shiki-token-link,var(--dsw-alias-brand-primary))}
 .dsh-we-message{flex:1 1 auto;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:12px;padding:16px 20px;text-align:center;color:var(--dsw-alias-label-secondary);line-height:1.6;white-space:normal}
+.dsh-wi-body{flex:1 1 auto;min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center;padding:12px;background:var(--dsw-alias-bg-layer-2)}
+.dsh-wi-image{max-width:100%;max-height:100%;object-fit:contain}
+.dsh-wi-body[data-fit="false"]{display:block}
+.dsh-wi-body[data-fit="false"] .dsh-wi-image{max-width:none;max-height:none}
 .dsh-we-message-text{margin:0;overflow-wrap:anywhere}
 .dsh-wef-root{display:flex;flex-direction:column;flex:auto;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:1.5}
 .dsh-wef-bar{flex:none;display:flex;align-items:center;gap:2px;height:38px;padding:0 6px 0 12px;border-bottom:.5px solid var(--dsw-alias-border-l1)}
@@ -382,6 +396,16 @@ window.__ModuleLoader__.load({
       'files.terminal.failed': '没能打开终端页签。',
       'files.terminal.noInput': '终端开了，但拿不到它的输入面，没能切到该目录。',
       'files.terminal.timeout': '终端开了，但等它可写超时，没能自动切到该目录。',
+      'image.title': '预览 {name}',
+      'image.alt': '图片预览',
+      'image.loading': '读取中…',
+      'image.fit': '适配窗口',
+      'image.actual': '原始大小',
+      'image.meta': '{size} · {width}×{height} · {type}',
+      'image.size': '{bytes} 字节',
+      'image.readFailed': '读取失败：{message}',
+      'image.decodeFailed': '浏览器解不开这个格式（{type}），文件本身是好的：{bytes} 字节。',
+      'image.openEditor': '用编辑器打开',
       'delete.stale': '文件已变更，未删除',
       'delete.noVersion': '读不到文件状态',
       'conflict.stale': '磁盘上的文件在编辑期间变过，尚未覆盖。',
@@ -498,6 +522,16 @@ window.__ModuleLoader__.load({
       'files.terminal.failed': 'The terminal tab could not be opened.',
       'files.terminal.noInput': 'The terminal opened, but its input was unavailable; the directory was not entered.',
       'files.terminal.timeout': 'The terminal opened, but it did not become writable in time; the directory was not entered.',
+      'image.title': 'Preview {name}',
+      'image.alt': 'Image preview',
+      'image.loading': 'Loading…',
+      'image.fit': 'Fit to window',
+      'image.actual': 'Actual size',
+      'image.meta': '{size} · {width}×{height} · {type}',
+      'image.size': '{bytes} bytes',
+      'image.readFailed': 'Read failed: {message}',
+      'image.decodeFailed': 'The browser cannot decode this format ({type}); the file itself is fine: {bytes} bytes.',
+      'image.openEditor': 'Open in the editor',
       'delete.stale': 'File changed, not deleted',
       'delete.noVersion': 'File state unavailable',
       'conflict.stale': 'The file changed on disk while you were editing; nothing was overwritten.',
@@ -815,6 +849,35 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 后缀 → 图片的 MIME（预览时给 `Blob` 用的类型）。
+     *
+     * 这份表比官方的 `IMAGE_MEDIA_TYPES`（png / jpg / jpeg / gif / webp / bmp / ico / svg）宽：
+     * 本插件的文件树点开图片时走的是**自己的**预览页签，遇到浏览器解不开的格式（tiff / heic 这些）
+     * 会明确说「解不开」而不是回一句「不是 UTF-8 文本」。表里认得、浏览器不认得的，由预览页的
+     * `error` 分支兜住。
+     */
+    const IMAGE_MEDIA_TYPES = {
+      png: 'image/png', apng: 'image/apng', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+      jfif: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+      ico: 'image/x-icon', svg: 'image/svg+xml', avif: 'image/avif',
+      tif: 'image/tiff', tiff: 'image/tiff', heic: 'image/heic', heif: 'image/heif',
+    }
+
+    /**
+     * 一个文件名 / 路径的后缀是不是图片。
+     * @param path - 文件名或路径。
+     * @returns 认出的 MIME，或 undefined（不是图片）。
+     */
+    function imageMediaTypeOf(path) {
+      const name = String(path).replaceAll('\\', '/')
+      const cut = name.lastIndexOf('/')
+      const file = (cut === -1 ? name : name.slice(cut + 1)).toLowerCase()
+      const dot = file.lastIndexOf('.')
+      if (dot <= 0) return undefined
+      return IMAGE_MEDIA_TYPES[file.slice(dot + 1)]
+    }
+
+    /**
      * 给一条路径加 shell 引号（「在终端打开」自动 `cd` 用）。
      *
      * 用**单引号**：它在 POSIX shell 与 PowerShell 里都是字面量，能挡住 `$`、反引号、空格的展开；
@@ -886,6 +949,7 @@ window.__ModuleLoader__.load({
       paste: ['M4.6 3.8h6.8v9.6H4.6z', 'M6.6 3.8V2.4h2.8v1.4', 'M6.4 7.2h3.2', 'M6.4 9.6h3.2'],
       path: ['M5.6 3 10.4 13', 'M3.2 6.2h.01', 'M12.8 9.8h.01'],
       terminal: ['M2.6 3.4 6.4 7.8 2.6 12.2', 'M8.6 12.4h4.8'],
+      image: ['M2.4 3.6h11.2v8.8H2.4z', 'M2.4 10.6 5.8 7.6l2.4 2 2.2-1.8 3.2 2.8', 'M10.8 6.2h.01'],
       trash: ['M2.8 4.6h10.4', 'M6.3 4.6V2.9h3.4v1.7', 'M4.4 4.6l.7 9.1h5.8l.7-9.1'],
       refresh: ['M13 8a5 5 0 1 1-1.7-3.7', 'M13.3 2.6v3.2h-3.2'],
       open: ['M2.5 12.5V6h6.5l-2.4 2.4', 'M6.6 3.5h6v6'],
@@ -2270,6 +2334,8 @@ window.__ModuleLoader__.load({
       function EditAction(props) {
         const { absolutePath, sessionId, t } = props
         if (typeof absolutePath !== 'string' || absolutePath === '') return null
+        // 图片没有「编辑」这件事：本插件只提供预览（文件树里点图片），编辑器给不了图片任何东西。
+        if (imageMediaTypeOf(absolutePath) !== undefined) return null
         const open = (event) => {
           // 用按钮所在的真实 DOM 位置问出面板与页签：只有拿得到当前页签才能「顶掉」它；
           // 问不到（浮动面板等）就退回「当前活动的停靠面板」，在旁边开一个。
@@ -2823,6 +2889,242 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 造出**图片预览**页签正文。
+     *
+     * 为什么是另一个页签类型而不是一个文档渲染器：官方已经有图片渲染器
+     * （`IMAGE_MEDIA_TYPES` 那八种后缀 + 共享缩放视图），注册一个默认档渲染器会把它顶掉 ——
+     * 这一步刻意只补**本插件自己的入口**：文件树的单击原来一律开文本编辑器，图片落到那里只会
+     * 得到「这个文件不是 UTF-8 文本，无法在页面里编辑。」。
+     *
+     * 页面里做三件事：把字节读出来交给 `<img>`（`Blob` + 对象 URL，换文件 / 卸载时 `revoke`）、
+     * 显示「适配窗口 / 原始大小」与字节数 / 尺寸 / MIME、以及一份右键菜单（复制路径 / 复制相对
+     * 路径 / 在终端打开 —— 调的是与文件树、编辑器**同一份**共用动作层）。
+     * @param ctx - 客户端根上下文。
+     * @returns 正文组件 `ImageBody`。
+     */
+    function createImageBody(ctx) {
+      /**
+       * 图片预览页签正文：目标来自打开时带的 `navigation.params`（与编辑器页签同一套）。
+       * @param props - 页签正文槽位交来的 props（`useTabInfo` / `sessionId` / `t`）。
+       * @returns 图片、工具条与提示，或缺目标 / 读盘失败 / 解不开时的说明。
+       */
+      function ImageBody(props) {
+        const { useTabInfo, sessionId, t } = props
+        const { tab } = useTabInfo()
+        const target = React.useMemo(() => paneTarget(tab, sessionId), [tab, sessionId])
+        const owner = target === null ? sessionId : target.sessionId
+        const path = target === null ? '' : target.path
+        const [state, setState] = React.useState({ phase: 'loading' })
+        const [fit, setFit] = React.useState(true)
+        const [menu, setMenu] = React.useState(null)
+        const [token, setToken] = React.useState(0)
+        const { notice, showNotice, dismissNotice } = useNotice()
+        /** 当前预览的对象 URL：读完就建，换文件 / 卸载时释放（不释放会一直占着这份字节）。 */
+        const urlRef = React.useRef(null)
+        const release = () => {
+          if (urlRef.current !== null) {
+            try { URL.revokeObjectURL(urlRef.current) } catch { /* 释放失败无所谓 */ }
+            urlRef.current = null
+          }
+        }
+
+        // 读盘：换文件、点重试都重读一次。字节交给 Blob，MIME 按后缀给（读接口只给字节）。
+        React.useEffect(() => {
+          if (path === '') return undefined
+          const controller = new AbortController()
+          let cancelled = false
+          release()
+          setState({ phase: 'loading' })
+          void (async () => {
+            let result
+            try {
+              result = await ctx.remote.workspaceFiles.readBytes(owner, path, {}, controller.signal)
+            } catch (error) {
+              if (!cancelled) {
+                const message = error instanceof Error ? error.message : String(error)
+                setState({ phase: 'failed', code: 'transport', message: t('image.readFailed', { message }) })
+              }
+              return
+            }
+            if (cancelled) return
+            if (!result.ok) {
+              setState({ phase: 'failed', code: result.error.code, message: t('image.readFailed', { message: result.error.message }) })
+              return
+            }
+            const type = imageMediaTypeOf(path) ?? 'application/octet-stream'
+            let url
+            try {
+              url = URL.createObjectURL(new Blob([result.value.data], { type }))
+            } catch (error) {
+              // 没有 `URL.createObjectURL`（极老的浏览器 / 某些嵌入环境）也不该白屏。
+              const message = error instanceof Error ? error.message : String(error)
+              setState({ phase: 'failed', code: 'blob', message: t('image.readFailed', { message }) })
+              return
+            }
+            urlRef.current = url
+            setState({ phase: 'ready', url, type, bytes: result.value.data.byteLength, width: 0, height: 0 })
+          })()
+          return () => { cancelled = true; controller.abort() }
+        }, [owner, path, token])
+
+        // 卸载释放对象 URL（页签关掉、换会话都会走这里）。
+        React.useEffect(() => () => { release() }, [])
+
+        /** 在这个文件上再开一个文本编辑器页签（看 SVG 源码这类用途的逃生口）。 */
+        const openEditor = () => {
+          ctx.sidebarRight.openResource(absoluteFileAddress(path), {
+            kind: EDITOR_KIND,
+            params: { sessionId: owner, path },
+          })
+        }
+
+        /** 一枚图片预览里的菜单项；动作本身调共用动作层，这里只管一处声明。 */
+        const menuButton = (id, icon, label, run) => h('button', {
+          key: id,
+          type: 'button',
+          className: 'dsh-wef-menu-item',
+          'data-workspace-editor-image-item': id,
+          onClick: (event) => {
+            event.stopPropagation()
+            setMenu(null)
+            run(event)
+          },
+        }, glyph(icon, 14), label)
+
+        if (target === null) {
+          return h('div', { className: 'dsh-we-root dsh-we-pane', 'data-workspace-editor-image': 'unavailable' },
+            h('style', null, CSS),
+            h('div', { className: 'dsh-we-message' },
+              h('p', { className: 'dsh-we-message-text' }, t('status.noAddress'))))
+        }
+
+        const meta = state.phase === 'ready'
+          ? (state.width > 0
+            ? t('image.meta', {
+              size: t('image.size', { bytes: state.bytes }),
+              width: state.width,
+              height: state.height,
+              type: state.type,
+            })
+            : `${t('image.size', { bytes: state.bytes })} · ${state.type}`)
+          : null
+
+        return h('div', {
+          className: 'dsh-we-root dsh-we-pane',
+          'data-workspace-editor-image': state.phase,
+          'data-workspace-editor-image-path': path,
+          onContextMenu: (event) => {
+            if (state.phase !== 'ready') return
+            event.preventDefault()
+            setMenu({ ...menuAnchorFor(event) })
+          },
+        },
+        h('style', null, CSS),
+        h('div', { className: 'dsh-we-bar' },
+          h('span', { className: 'dsh-we-status', 'data-workspace-editor-image-meta': '' }, meta ?? t('image.loading')),
+          h('span', { className: 'dsh-we-spacer' }),
+          state.phase === 'ready' && h('button', {
+            type: 'button',
+            className: 'dsh-we-button',
+            'data-workspace-editor-image-fit': fit ? 'true' : 'false',
+            onClick: () => { setFit((value) => !value) },
+          }, t(fit ? 'image.actual' : 'image.fit')),
+          state.phase === 'ready' && h('button', {
+            type: 'button',
+            className: 'dsh-we-button',
+            'data-workspace-editor-image-editor': '',
+            onClick: openEditor,
+          }, t('image.openEditor')),
+          state.phase === 'failed' && h('button', {
+            type: 'button',
+            className: 'dsh-we-button',
+            'data-workspace-editor-image-retry': '',
+            onClick: () => { setToken((value) => value + 1) },
+          }, t('action.retry'))),
+        notice !== null && h('p', {
+          className: 'dsh-we-banner',
+          'data-tone': notice.tone,
+          'data-workspace-editor-image-notice': '',
+        },
+        h('span', { className: 'dsh-we-banner-text' }, notice.text),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-button',
+          'data-workspace-editor-image-notice-dismiss': '',
+          onClick: () => { dismissNotice() },
+        }, t('action.cancel'))),
+        state.phase === 'failed' && h('div', { className: 'dsh-we-message', 'data-workspace-editor-image-error': state.code },
+          h('p', { className: 'dsh-we-message-text' }, state.message)),
+        state.phase === 'ready' && h('div', {
+          className: 'dsh-wi-body',
+          'data-fit': fit ? 'true' : 'false',
+        },
+        h('img', {
+          className: 'dsh-wi-image',
+          src: state.url,
+          alt: t('image.alt'),
+          draggable: false,
+          onLoad: (event) => {
+            const width = event.currentTarget.naturalWidth
+            const height = event.currentTarget.naturalHeight
+            setState((prev) => (prev.phase === 'ready' ? { ...prev, width, height } : prev))
+          },
+          onError: () => {
+            // 后缀说是图片、浏览器解不开（tiff / heic 这类）：说清楚，并给出逃生口。
+            setState((prev) => (prev.phase === 'ready' ? { ...prev, phase: 'undecodable' } : prev))
+          },
+        })),
+        state.phase === 'undecodable' && h('div', { className: 'dsh-we-message' },
+          h('p', { className: 'dsh-we-message-text', 'data-workspace-editor-image-undecodable': state.type },
+            t('image.decodeFailed', { type: state.type, bytes: state.bytes })),
+          h('div', { className: 'dsh-we-message-text' },
+            h('button', {
+              type: 'button',
+              className: 'dsh-we-button',
+              'data-workspace-editor-image-retry': '',
+              onClick: () => { setToken((value) => value + 1) },
+            }, t('action.retry')),
+            ' ',
+            h('button', {
+              type: 'button',
+              className: 'dsh-we-button',
+              'data-workspace-editor-image-editor': '',
+              onClick: openEditor,
+            }, t('image.openEditor')))),
+        menu !== null && h('div', {
+          className: 'dsh-wef-backdrop',
+          'data-workspace-editor-image-backdrop': '',
+          onClick: () => { setMenu(null) },
+          onContextMenu: (event) => { event.preventDefault(); setMenu(null) },
+        }),
+        menu !== null && h('div', {
+          className: 'dsh-wef-menu',
+          style: { left: `${String(menu.x)}px`, top: `${String(menu.y)}px` },
+          'data-workspace-editor-image-menu': path,
+        },
+        menuButton('copy-path', 'path', t('files.copyPath'), () => {
+          void (async () => {
+            const outcome = await copyPathToClipboard(path, false, sessionCwd(ctx, owner), t)
+            showNotice(outcome.ok ? t('files.copyPath.done', { path: outcome.text }) : outcome.text, outcome.ok ? 'ok' : 'error', outcome.ok !== true)
+          })()
+        }),
+        menuButton('copy-path-relative', 'path', t('files.copyPathRelative'), () => {
+          void (async () => {
+            const outcome = await copyPathToClipboard(path, true, sessionCwd(ctx, owner), t)
+            showNotice(outcome.ok ? t('files.copyPath.done', { path: outcome.text }) : outcome.text, outcome.ok ? 'ok' : 'error', outcome.ok !== true)
+          })()
+        }),
+        menuButton('open-terminal', 'terminal', t('files.openTerminal'), (event) => {
+          void openTerminalAt(ctx, directoryOfFile(path, sessionCwd(ctx, owner)), event?.currentTarget ?? null, t, (result) => {
+            showNotice(result.ok === true ? t('files.terminal.done', { path: result.dir }) : t(result.key), result.ok === true ? 'ok' : 'error', result.ok !== true)
+          })
+        })))
+      }
+
+      return { ImageBody }
+    }
+
+    /**
      * 造出「文件编辑」面板（页签类型 + 自带文件树）。
      *
      * 与「工作区文件」面板的关系：两者都是右侧栏的**页签类型**（`sidebarRightTabs.register`
@@ -3107,11 +3409,18 @@ window.__ModuleLoader__.load({
           })
         }
 
-        /** 在编辑器页签里打开一个文件（不顶掉本面板所在的页签）。 */
+        /**
+         * 在页签里打开一个文件（不顶掉本面板所在的页签）。
+         *
+         * **图片走图片预览页签**：落到文本编辑器上只会得到「这个文件不是 UTF-8 文本」。
+         * @param path - 文件的绝对路径。
+         * @returns 无。
+         */
         const openFile = (path) => {
           const placement = paneId === undefined ? {} : { paneId }
+          const kind = imageMediaTypeOf(path) === undefined ? EDITOR_KIND : IMAGE_KIND
           ctx.sidebarRight.openResource(absoluteFileAddress(path), {
-            kind: EDITOR_KIND,
+            kind,
             ...placement,
             params: { sessionId, path },
           })
@@ -3987,6 +4296,7 @@ window.__ModuleLoader__.load({
       const t = ctx.locale.bind(NS)
       const { DocumentBody, PaneBody, EditAction, DeleteAction } = createEditor(ctx)
       const { FilesPanel } = createFilesPanel(ctx)
+      const { ImageBody } = createImageBody(ctx)
       const bands = [
         { id: DEFAULT_RENDERER_ID, extensions: DEFAULT_EXTENSIONS, priority: 'extension' },
         { id: OPTIONAL_RENDERER_ID, extensions: OPTIONAL_EXTENSIONS, priority: 'builtin' },
@@ -4022,6 +4332,22 @@ window.__ModuleLoader__.load({
         key: EDITOR_TAB_ID,
         locale: NS,
       }, PaneBody)), 'workspace-editor: editor tab body')
+
+      // 图片预览：**另一个页签类型**（不是文档渲染器，官方那个图片渲染器保持原样）。pattern 同样
+      // 命中不了真实地址 —— 图片的自动打开仍然归官方预览，只有显式点名 kind 才开（本插件的文件树）。
+      ctx.effect(() => ctx.sidebarRightTabs.register({
+        id: IMAGE_TAB_ID,
+        kind: IMAGE_KIND,
+        patterns: [IMAGE_TAB_PATTERN],
+        priority: 'builtin',
+        canOpen: (address) => typeof address === 'string' && address.startsWith(FILE_ADDRESS_PREFIX),
+        title: (address) => t('image.title', { name: fileNameOf(address) }),
+      }), 'workspace-editor: image tab type')
+      ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
+        name: 'sidebar.right.pane.tab',
+        key: IMAGE_TAB_ID,
+        locale: NS,
+      }, ImageBody)), 'workspace-editor: image tab body')
 
       ctx.effect(() => ctx.slots.inject('sidebar.right.tab.document.actions', () => ctx.slots.register({
         name: 'sidebar.right.tab.document.actions',
