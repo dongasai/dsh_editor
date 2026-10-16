@@ -44,7 +44,7 @@
 | 文件 | 作用 |
 |---|---|
 | [index.js](index.js) | Host 半边全部实现：六条路由共用外壳 + 三道闸 + 版本闸 + `node:fs` 的 errno 映射 + base64 线性校验 |
-| [client.js](client.js) | 浏览器半边全部实现：三档入口 + `EditorSurface` + 语法高亮层与令牌表 + 删除按钮 + 「文件编辑」文件树面板（含剪贴板 / 粘贴 / 复制路径）+ 右键「发送到 DSH」 |
+| [client.js](client.js) | 浏览器半边全部实现：三档入口 + `EditorSurface` + 语法高亮层与令牌表 + 删除按钮 + 「文件编辑」文件树面板（含剪贴板 / 粘贴）+ 右键菜单动作（复制路径 / 复制相对路径 / 在终端打开，编辑器与文件树共用一份实现）+ 右键「发送到 DSH」 |
 | [cordis.patch.yml](cordis.patch.yml) | 插进 profile 的那一行 |
 | [package.json](package.json) | bundle 清单：`dsh.bundle.patch` + `dsh.client`（`platform` / `immediately` / `inject`） |
 | [locale/zh.json](locale/zh.json) / [locale/en.json](locale/en.json) | 插件列表里的标题与描述 |
@@ -78,8 +78,10 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
 `HIGHLIGHT_API_SUPPORTED` + `applyHighlights` / `releaseHighlights` / `rebuildHighlights`（DOM 侧，
 Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵）→
 `createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` / `EditAction` / `DeleteAction`）
-→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`：目录树 + 内部剪贴板 / 系统剪贴板粘贴 +
-菜单里的 `copyPath` / `openInTerminal`+`sendCdInto` / `showNotice`）→
+→ **两半共用的动作层**（`useNotice` 一次性提示状态机 / `copyPathText` / `copyPathToClipboard` /
+`directoryOfFile` / `openTerminalAt`+`sendCdInto`+`waitForTerminalTab`：编辑器菜单与文件树菜单
+同一份实现）→ `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`：目录树 + 内部剪贴板 /
+系统剪贴板粘贴 + 菜单里的 `copyPath` / `openInTerminal`）→
 `inject` + `apply`（编辑 / 删除按钮注册在
 同一个槽位，id 与 order 各一档；「文件编辑」是页签类型 + `sidebar.right.pane.tab` 正文 + 快捷键
 + 输入框哨兵）。
@@ -138,10 +140,12 @@ Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵�
     顶掉了。
 15. **树的状态都在组件里，不要把目录树塞进模块级缓存**：换会话 / 换工作区根靠外层 `key` 重挂，
     每个加载过的目录订阅一次变更流（120ms 防抖合并重列），读盘用代次号挡住晚到的旧结果。
-16. **重命名等行操作只允许有「一套实现、多个入口」**：行内图标、行尾常显的「⋯」菜单、右键菜单、
+16. **行操作只允许有「一套实现、多个入口」**：行内图标、行尾常显的「⋯」菜单、右键菜单、
     工具条按钮、F2 全部调同一个 `startRename()` —— 不要再写第二份改名逻辑。新增行操作时照这个
     形状加（`menuItem()` 一处声明、各处复用），并记得**常显入口**：只有悬停才出现的按钮等于
-    没有按钮（用户反馈过一次「tree 缺重命名」）。
+    没有按钮（用户反馈过一次「tree 缺重命名」）。**跨面同理**：编辑器右键菜单与文件树菜单的
+    「复制路径 / 复制相对路径 / 在终端打开」是同一份实现（工厂作用域那几个函数），各面只渲染
+    自己位置的横幅 —— 想在某一面加动作时先问「另一面要不要」，要就加到共用那一层。
 17. **「发送到 DSH」的两个细节不要「顺手优化」掉**：插进输入框的引用**必须带尾随空格** ——
     否则 `@` 触发检测会认为用户正在输引用、把 `@` 文件菜单唤出来，用户得手动 Esc；
     `captureInsertion()` 与 `insertText()` 必须挨着调用 —— 中间任何编辑都会让版本 CAS 失败、
@@ -260,6 +264,9 @@ node --check client.js
   的设计」里那条粘贴说明与 README 的排错表 / 已知边界 / 手工清单。
 - 动 tree 的菜单动作（复制路径这类只写系统剪贴板的动作）→ 同样同步上面两处；菜单项一律走
   `menuItem()` 一处声明，别只为右键菜单再写一份（约束 16）。
+- 动「复制路径 / 在终端打开」→ 它们是**两个面共用**的（编辑器右键菜单 + 文件树菜单），改共用层
+  就别只改一边；两处的手工清单与锚点（树的 `[data-workspace-editor-files-notice]`、编辑器的
+  `[data-workspace-editor-action-notice]`）都要同步。
 - 动「在终端打开」→ 先确认官方那三条契约没变（`remote.terminal.create` **没有 cwd**、
   `TerminalView.write` 在不可写时**静默丢弃**、页签身份只能从 `active()` / `tabsIn()` 现读）；
   变了就同步 README 的用法一段 / 排错表 / 已知边界与 IMPLEMENTATION 的面板一节。

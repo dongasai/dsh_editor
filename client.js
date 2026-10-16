@@ -1557,6 +1557,8 @@ window.__ModuleLoader__.load({
         const [menu, setMenu] = React.useState(null)
         /** 「发送到 DSH」的结果：`sent` 亮一会儿，`failed` 留在横幅里等人处理。 */
         const [send, setSend] = React.useState({ phase: 'idle' })
+        /** 菜单里那几项「就地动作」的提示（复制路径 / 在终端打开），查询与文件树共用同一个状态机。 */
+        const { notice, showNotice, dismissNotice } = useNotice()
 
         const draftRef = React.useRef(draft)
         draftRef.current = draft
@@ -1864,6 +1866,41 @@ window.__ModuleLoader__.load({
          *    不会又把 `@` 文件菜单唤出来。
          * @returns 无。
          */
+        /**
+         * 「复制路径 / 复制相对路径」：复制**这个文件**的路径。
+         *
+         * 路径优先用读盘拿到的 `absolutePath`（渲染器入口给的相对路径不一定带工作区根）；
+         * 相对路径的基准是**会话工作区根**（事件里现读，见约束 19：不假设槽位传了什么 prop）。
+         * 与文件树共用 `copyPathToClipboard`，只是横幅渲染在编辑器自己的位置。
+         * @param relative - true 复制相对工作区根的路径。
+         * @returns 无。
+         */
+        const copyEditorPath = async (relative) => {
+          const outcome = await copyPathToClipboard(doc.absolutePath ?? path, relative, sessionCwd(ctx, sessionId), t)
+          if (!outcome.ok) {
+            showNotice(outcome.text, 'error', true)
+            return
+          }
+          showNotice(t('files.copyPath.done', { path: outcome.text }), 'ok')
+        }
+
+        /**
+         * 「在终端打开」：打开这个文件**所在目录**的终端（同样受官方 API 限制，见
+         * `openTerminalAt` —— 是开完再替你敲一条 `cd`）。
+         * @param element - 触发这次动作的元素。
+         * @returns 无。
+         */
+        const openEditorTerminal = async (element) => {
+          const file = doc.absolutePath ?? path
+          await openTerminalAt(ctx, directoryOfFile(file, sessionCwd(ctx, sessionId)), element, t, (result) => {
+            if (result.ok === true) {
+              showNotice(t('files.terminal.done', { path: result.dir }), 'ok')
+              return
+            }
+            showNotice(t(result.key), 'error', true)
+          })
+        }
+
         const sendToInput = () => {
           const area = areaRef.current
           const current = docRef.current
@@ -1948,7 +1985,8 @@ window.__ModuleLoader__.load({
           onClick: (event) => {
             event.stopPropagation()
             setMenu(null)
-            run()
+            // 事件要透下去：`ctx.sidebarRight.commandTarget(element)` 靠触发元素定位侧边栏页。
+            run(event)
           },
         }, extra?.icon === null ? null : glyph(extra?.icon ?? 'file', 14), label)
 
@@ -2040,6 +2078,18 @@ window.__ModuleLoader__.load({
           'data-tone': 'warn',
           'data-workspace-editor-notice': '',
         }, h('span', { className: 'dsh-we-banner-text' }, doc.notice)),
+        notice !== null && h('p', {
+          className: 'dsh-we-banner',
+          'data-tone': notice.tone,
+          'data-workspace-editor-action-notice': '',
+        },
+        h('span', { className: 'dsh-we-banner-text' }, notice.text),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-button',
+          'data-workspace-editor-action-notice-dismiss': '',
+          onClick: () => { dismissNotice() },
+        }, t('action.cancel'))),
         h('div', { className: 'dsh-we-bar' },
           h('span', {
             className: 'dsh-we-status',
@@ -2144,7 +2194,11 @@ window.__ModuleLoader__.load({
           icon: 'send',
           disabled: menu.token === null,
           title: menu.token === null ? t('send.failed.path') : t('send.menuTitle', { token: menu.token }),
-        })))
+        }),
+        h('div', { className: 'dsh-wef-menu-sep', key: 'sep-paths' }),
+        sendMenuItem('copy-path', t('files.copyPath'), () => { void copyEditorPath(false) }, { icon: 'path' }),
+        sendMenuItem('copy-path-relative', t('files.copyPathRelative'), () => { void copyEditorPath(true) }, { icon: 'path' }),
+        sendMenuItem('open-terminal', t('files.openTerminal'), (event) => { void openEditorTerminal(event?.currentTarget ?? null) }, { icon: 'terminal' })))
       }
 
       /**
@@ -2466,6 +2520,236 @@ window.__ModuleLoader__.load({
      */
     const TERMINAL_READY_MS = 15000
 
+    /**
+     * 一次性提示的状态机：「已复制：<路径>」这类没有落盘副作用的回话。
+     *
+     * 文件树与编辑器共用同一份（两处都要「亮一条、几秒后自己消失、也能点掉」），各自在
+     * 自己的位置渲染横幅 —— 这两个面（`sidebar.right.pane.tab` 的两种 kind）状态是分开的，
+     * 共享的只有这套状态机本身。
+     * @returns `{ notice, showNotice, dismissNotice }`。
+     */
+    function useNotice() {
+      const [notice, setNotice] = React.useState(null)
+      const timer = React.useRef(null)
+      const alive = React.useRef(true)
+      React.useEffect(() => () => {
+        alive.current = false
+        if (timer.current !== null) clearTimeout(timer.current)
+      }, [])
+      const dismissNotice = React.useCallback(() => {
+        if (timer.current !== null) clearTimeout(timer.current)
+        timer.current = null
+        setNotice(null)
+      }, [])
+      /**
+       * @param text - 已经本地化好的文本。
+       * @param tone - `ok` | `warn` | `error`。
+       * @param sticky - true 时不自动消失（失败要留到用户处理或点掉），只能手动关。
+       */
+      const showNotice = React.useCallback((text, tone, sticky) => {
+        // 组件已经卸载：不再动状态（「在终端打开」的结果可能来得比面板的命还晚）。
+        if (!alive.current) return
+        if (timer.current !== null) clearTimeout(timer.current)
+        timer.current = null
+        setNotice({ text, tone })
+        if (sticky !== true) {
+          timer.current = setTimeout(() => {
+            timer.current = null
+            if (alive.current) setNotice(null)
+          }, NOTICE_MS)
+        }
+      }, [])
+      return { notice, showNotice, dismissNotice }
+    }
+
+    /**
+     * 「复制相对路径」的文本：相对 `cwd`（会话工作区根）。
+     *
+     * 根自己用 `.` —— 回一个绝对路径会让人以为「相对路径没生效」；拿不到 `cwd` 时原样返回
+     * （宁可给绝对路径，也不要凭空造一个相对路径）。
+     * @param path - 这一行的路径。
+     * @param relative - true 要相对路径。
+     * @param cwd - 会话工作区根。
+     * @returns 要写进剪贴板的文本。
+     */
+    function copyPathText(path, relative, cwd) {
+      if (relative !== true) return path
+      if (typeof cwd !== 'string' || cwd === '') return path
+      return path === cwd.replace(/[/\\]+$/u, '') ? '.' : relativizeToCwd(path, cwd)
+    }
+
+    /**
+     * 把一条路径写进系统剪贴板（文件树与编辑器的「复制路径 / 复制相对路径」共用）。
+     * @param path - 要复制的路径。
+     * @param relative - true 复制相对工作区根的路径。
+     * @param cwd - 会话工作区根。
+     * @param t - 文案函数。
+     * @returns `{ ok: true, text }`（写进去了）或 `{ ok: false, text }`（失败文案，调用方显示）。
+     */
+    async function copyPathToClipboard(path, relative, cwd, t) {
+      const text = copyPathText(path, relative, cwd)
+      if (await writeClipboard(text)) return { ok: true, text }
+      return { ok: false, text: t('files.copyPath.failed') }
+    }
+
+    /**
+     * 一个**文件**路径所在目录。
+     *
+     * 与文件树里的 `parentOf` 不同：这里的路径可能没有分隔符（编辑器拿到的是相对工作区根的
+     * 路径），那时不能把文件名当目录回给 `cd`，而要回工作区根（终端就是从那儿起步的）。
+     * @param path - 文件路径（绝对或相对）。
+     * @param cwd - 会话工作区根，拿不到时退回 `.`。
+     * @returns 目录路径。
+     */
+    function directoryOfFile(path, cwd) {
+      const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+      if (cut > 0) return path.slice(0, cut)
+      if (cut === 0) return '/'
+      return typeof cwd === 'string' && cwd !== '' ? cwd : '.'
+    }
+
+    /** 一个会话提交后的页签记录（公开接口 `tabsIn`；读不到就当没有）。 */
+    function tabsOfSession(ctx, sessionId) {
+      try { return ctx.sidebarRight.tabsIn(sessionId) ?? [] } catch { return [] }
+    }
+
+    /**
+     * 等刚开的终端页签出现。
+     *
+     * 先看公开的 `active()`（开页签会把选中挪过去，正常情况一次就命中），再拿 `tabsIn()` 的差集
+     * 兜底 —— 布局 store 是异步提交的，所以是轮询而不是读一次。
+     * @param ctx - 客户端根上下文。
+     * @param sessionId - 在哪个会话里开。
+     * @param before - 开之前已有的页签 id。
+     * @returns 新终端页签，或 undefined。
+     */
+    async function waitForTerminalTab(ctx, sessionId, before) {
+      const until = Date.now() + TERMINAL_TAB_MS
+      for (;;) {
+        const active = (() => {
+          try { return ctx.sidebarRight.active() } catch { return undefined }
+        })()
+        if (active !== undefined && active.kind === TERMINAL_KIND && !before.has(active.id)) return active
+        const found = tabsOfSession(ctx, sessionId).find((tab) => tab.kind === TERMINAL_KIND && !before.has(tab.id))
+        if (found !== undefined) return found
+        if (Date.now() >= until) return undefined
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+    }
+
+    /**
+     * 等一个终端可写，然后把 `cd '<目录>'` 敲进去。
+     *
+     * 这个 watcher **刻意不随调用它的组件卸载而取消**：开了终端之后那个面板很可能被终端页签顶掉
+     * （我们会把新页签聚焦过来），而这时的 cd 还没发出去。它自己在三个出口收尾 —— 可写（写一次）、
+     * 失败 / 关闭（不吭声：终端页签自己会显示失败原因）、超时（回调里说明）。
+     * @param terminals - 客户端的 `webTerminals` 服务。
+     * @param sessionId - 会话 id。
+     * @param tab - 刚开的终端页签记录。
+     * @param dir - 要切过去的目录。
+     * @param report - 结果回调（可能比调用晚很多；调用方自己守卫组件是否还活着）。
+     * @returns 无。
+     */
+    function sendCdInto(terminals, sessionId, tab, dir, report) {
+      const view = (() => {
+        try { return terminals.view(sessionId, tab.id, tab.contentId, undefined, undefined) } catch { return undefined }
+      })()
+      if (view === undefined || view.state === undefined) {
+        report({ ok: false, key: 'files.terminal.noInput' })
+        return
+      }
+      const command = `cd ${shellQuotePath(dir)}\r`
+      let settled = false
+      let unsubscribe = () => {}
+      let timer = null
+      const finish = (after) => {
+        if (settled) return
+        settled = true
+        if (timer !== null) clearTimeout(timer)
+        try { unsubscribe() } catch { /* 退订失败无所谓 */ }
+        if (after !== undefined) after()
+      }
+      const onChange = () => {
+        let state
+        try { state = view.state.getSnapshot() } catch { return }
+        if (state?.writable === true) {
+          // `write()` 在不可写时是**静默丢弃**的，所以必须等到 writable；到了就只写一次。
+          try { view.write(command) } catch {
+            finish(() => { report({ ok: false, key: 'files.terminal.noInput' }) })
+            return
+          }
+          finish(() => { report({ ok: true, dir }) })
+          return
+        }
+        // 失败 / 已关闭：终端页签自己会显示原因（例如超了终端数量上限），这里不再叠一条横幅。
+        if (state?.phase === 'failed' || state?.phase === 'closed') finish()
+      }
+      timer = setTimeout(() => {
+        finish(() => { report({ ok: false, key: 'files.terminal.timeout' }) })
+      }, TERMINAL_READY_MS)
+      try {
+        unsubscribe = view.state.subscribe(onChange)
+      } catch {
+        finish()
+        return
+      }
+      onChange()
+    }
+
+    /**
+     * 「在终端打开」的公共实现（文件树与编辑器共用）。
+     *
+     * 官方 `remote.terminal.create` 只收 `shellPath`（没有 cwd），页签 params 也只有
+     * `terminalId` / `shellPath` —— 侧边栏终端一律从**会话工作区根**起步。所以目录只能靠开完
+     * 再敲一条 `cd` 带过去，而 `TerminalView.write()` 在不可写时**静默丢弃**，必须等
+     * `state.writable === true`（见 `sendCdInto`）。
+     *
+     * 三条不假设：终端页类型可能没注册（先问 `sidebarRightTabs.entries()`）；`webTerminals` 是
+     * 跨插件服务（一律 `ctx.get`，不进 `inject`，见约束 20）；页签身份只能从公开的
+     * `active()` / `tabsIn()` 现读（布局 store 异步提交），取不到就报「没能打开」，不猜。
+     * @param ctx - 客户端根上下文。
+     * @param dir - 要在哪个目录里打开（绝对路径，或相对工作区根的路径 —— 终端从工作区根起步）。
+     * @param element - 触发这次动作的元素，交给 `commandTarget` 定位当前侧边栏页。
+     * @param t - 文案函数。
+     * @param report - 结果回调：`{ ok: true, dir }` 或 `{ ok: false, key }`（本地化键）。
+     * @returns 请求处理完即返回（真正的结果走 report）。
+     */
+    async function openTerminalAt(ctx, dir, element, t, report) {
+      const registered = (() => {
+        try { return ctx.sidebarRightTabs.entries().some((entry) => entry.kind === TERMINAL_KIND) } catch { return false }
+      })()
+      if (!registered) {
+        report({ ok: false, key: 'files.terminal.missing' })
+        return
+      }
+      const target = (() => {
+        try { return ctx.sidebarRight.commandTarget(element ?? null) } catch { return undefined }
+      })()
+      if (target === undefined) {
+        report({ ok: false, key: 'files.terminal.failed' })
+        return
+      }
+      const before = new Set(tabsOfSession(ctx, target.sessionId).map((tab) => tab.id))
+      try {
+        ctx.sidebarRight.openTabFromTarget(TERMINAL_KIND, target)
+      } catch {
+        report({ ok: false, key: 'files.terminal.failed' })
+        return
+      }
+      const tab = await waitForTerminalTab(ctx, target.sessionId, before)
+      if (tab === undefined) {
+        report({ ok: false, key: 'files.terminal.failed' })
+        return
+      }
+      try { ctx.sidebarRight.focus(tab.id) } catch { /* 聚焦不了不影响后面的 cd */ }
+      const terminals = ctx.get('webTerminals')
+      if (terminals === undefined || typeof terminals.view !== 'function') {
+        report({ ok: false, key: 'files.terminal.noInput' })
+        return
+      }
+      sendCdInto(terminals, target.sessionId, tab, dir, report)
+    }
+
     /** 读到的插件信息（读到才缓存；读不到不缓存，下次开面板再试）。 */
     let pluginInfoValue = null
 
@@ -2666,8 +2950,8 @@ window.__ModuleLoader__.load({
         const [pending, setPending] = React.useState(null)
         const [busy, setBusy] = React.useState(null)
         const [error, setError] = React.useState(null)
-        /** 一次性提示：`{ text, tone }`；成功色、几秒后自己消失（复制路径这种动作只在这里回话）。 */
-        const [notice, setNotice] = React.useState(null)
+        /** 一次性提示：成功自己消失、失败留到用户点掉（共享的状态机，见 `useNotice`）。 */
+        const { notice, showNotice, dismissNotice } = useNotice()
         const [dropOn, setDropOn] = React.useState(null)
         /** 右键菜单：`{ path, type, x, y }`；坐标是视口坐标（菜单用 position:fixed）。 */
         const [menu, setMenu] = React.useState(null)
@@ -2689,14 +2973,12 @@ window.__ModuleLoader__.load({
         const reloadTimers = React.useRef(new Map())
         const dragRef = React.useRef(null)
         const reloadRef = React.useRef(null)
-        const noticeTimer = React.useRef(null)
 
         // 卸载：停掉观察流、清掉节流计时器、中止在飞的读盘。
         React.useEffect(() => () => {
           aliveRef.current = false
           controllerRef.current?.abort()
           for (const timer of reloadTimers.current.values()) clearTimeout(timer)
-          if (noticeTimer.current !== null) clearTimeout(noticeTimer.current)
           for (const stop of watchers.current.values()) void stop()
           watchers.current.clear()
         }, [])
@@ -2967,21 +3249,15 @@ window.__ModuleLoader__.load({
         }
 
         /**
-         * 亮一条一次性提示。
-         *
-         * 「复制路径」这类动作对文件系统没有任何副作用，用它自己的成功横幅回话就够；几秒后自己
-         * 消失（`NOTICE_MS`），不用用户去点掉。
+         * 亮一条一次性提示；组件已经卸载时不再动状态。
          * @param text - 已经本地化好的文本。
          * @param tone - `ok` | `warn` | `error`。
+         * @param sticky - true 时不自动消失（失败留到用户点掉）。
          * @returns 无。
          */
-        const showNotice = (text, tone) => {
-          if (noticeTimer.current !== null) clearTimeout(noticeTimer.current)
-          setNotice({ text, tone })
-          noticeTimer.current = setTimeout(() => {
-            noticeTimer.current = null
-            if (aliveRef.current) setNotice(null)
-          }, NOTICE_MS)
+        const notify = (text, tone, sticky) => {
+          if (!aliveRef.current) return
+          showNotice(text, tone, sticky)
         }
 
         /**
@@ -2996,154 +3272,33 @@ window.__ModuleLoader__.load({
          * @returns 无。
          */
         const copyPath = async (path, relative) => {
-          const text = relative ? (path === root ? '.' : relativizeToCwd(path, root)) : path
-          const written = await writeClipboard(text)
-          if (!written) {
-            setError(t('files.copyPath.failed'))
+          const outcome = await copyPathToClipboard(path, relative, root, t)
+          if (!outcome.ok) {
+            notify(outcome.text, 'error', true)
             return
           }
-          showNotice(t('files.copyPath.done', { path: text }), 'ok')
+          notify(t('files.copyPath.done', { path: outcome.text }), 'ok')
         }
 
         /**
          * 「在终端打开」：请侧边栏开一个终端页签，等它的 shell 变成可写了，再替用户敲一条 `cd`。
          *
-         * **为什么不是「让终端在该目录启动」**：官方 `remote.terminal.create` 只收 `shellPath`
-         * （没有 cwd），页签 params 也只有 `terminalId` / `shellPath` —— 侧边栏终端一律从**会话
-         * 工作区根**起步。所以目录只能靠开完再敲一条 `cd` 带过去；`TerminalView.write()` 在
-         * **不可写时是静默丢弃**的（官方实现开头就是 `if (!state.writable …) return`），因此必须
-         * 等 `state.writable === true`，不能抢跑。
-         *
-         * 三条不假设：
-         * 1. 终端页类型可能没注册（部署里没有这套 UI）→ 先问 `sidebarRightTabs.entries()`。
-         * 2. `webTerminals` 是跨插件服务 → 一律 `ctx.get`，不进 `inject`（约束 20），拿不到就明说。
-         * 3. 页签身份只能从公开的 `active()` / `tabsIn()` 现读（布局 store 推过来有延迟）→ 轮询取
-         *    差集，取不到就报「没能打开」，不猜。
-         * @param path - 被右键的那一行（文件行用它的父目录）。
+         * 目录行用目录本身，文件行用它的父目录；目录行 / 文件行的判定与工具条一致（`isDirPath`）。
+         * 实现是工厂作用域里的 `openTerminalAt`（编辑器那份菜单共用同一份），这里只负责把结果
+         * 变成面板上的横幅：成功亮一次性提示，失败留一条（粘在屏幕上等用户处理或点掉）。
+         * @param path - 被右键的那一行。
          * @param element - 触发这次动作的元素，交给 `commandTarget` 定位当前侧边栏页。
          * @returns 请求处理完即返回。
          */
         const openInTerminal = async (path, element) => {
-          setError(null)
-          const registered = (() => {
-            try { return ctx.sidebarRightTabs.entries().some((entry) => entry.kind === TERMINAL_KIND) } catch { return false }
-          })()
-          if (!registered) {
-            setError(t('files.terminal.missing'))
-            return
-          }
-          const target = (() => {
-            try { return ctx.sidebarRight.commandTarget(element ?? null) } catch { return undefined }
-          })()
-          if (target === undefined) {
-            setError(t('files.terminal.failed'))
-            return
-          }
           const dir = isDirPath(path) ? path : parentOf(path)
-          const before = new Set(tabsOfSession(target.sessionId).map((tab) => tab.id))
-          try {
-            ctx.sidebarRight.openTabFromTarget(TERMINAL_KIND, target)
-          } catch {
-            setError(t('files.terminal.failed'))
-            return
-          }
-          const tab = await waitForTerminalTab(target.sessionId, before)
-          if (tab === undefined) {
-            setError(t('files.terminal.failed'))
-            return
-          }
-          try { ctx.sidebarRight.focus(tab.id) } catch { /* 聚焦不了不影响后面的 cd */ }
-          const terminals = ctx.get('webTerminals')
-          if (terminals === undefined || typeof terminals.view !== 'function') {
-            setError(t('files.terminal.noInput'))
-            return
-          }
-          sendCdInto(terminals, target.sessionId, tab, dir)
-        }
-
-        /** 一个会话提交后的页签记录（公开接口 `tabsIn`；读不到就当没有）。 */
-        const tabsOfSession = (sessionId) => {
-          try { return ctx.sidebarRight.tabsIn(sessionId) ?? [] } catch { return [] }
-        }
-
-        /**
-         * 等刚开的终端页签出现。
-         *
-         * 先看公开的 `active()`（开页签会把选中挪过去，正常情况一次就命中），再拿 `tabsIn()` 的差集
-         * 兜底 —— 布局 store 是异步提交的，所以是轮询而不是读一次。
-         * @param sessionId - 在哪个会话里开。
-         * @param before - 开之前已有的页签 id。
-         * @returns 新终端页签，或 undefined。
-         */
-        const waitForTerminalTab = async (sessionId, before) => {
-          const until = Date.now() + TERMINAL_TAB_MS
-          for (;;) {
-            const active = (() => {
-              try { return ctx.sidebarRight.active() } catch { return undefined }
-            })()
-            if (active !== undefined && active.kind === TERMINAL_KIND && !before.has(active.id)) return active
-            const found = tabsOfSession(sessionId).find((tab) => tab.kind === TERMINAL_KIND && !before.has(tab.id))
-            if (found !== undefined) return found
-            if (Date.now() >= until) return undefined
-            await new Promise((resolve) => setTimeout(resolve, 50))
-          }
-        }
-
-        /**
-         * 等这个终端可写，然后把 `cd '<目录>'` 敲进去。
-         *
-         * 这个 watcher **刻意不随面板卸载而取消**：开了终端之后面板很可能被终端页签顶掉（聚焦会切
-         * 页签），而这时的 cd 还没发出去。它自己在三个出口收尾 —— 可写（写一次）、失败 / 关闭
-         * （不吭声：终端页签自己会显示失败原因）、超时（横幅说明）。只有 setState 受 `aliveRef` 守卫。
-         * @param terminals - 客户端的 `webTerminals` 服务。
-         * @param sessionId - 会话 id。
-         * @param tab - 刚开的终端页签记录。
-         * @param dir - 要切过去的目录（绝对路径）。
-         * @returns 无。
-         */
-        const sendCdInto = (terminals, sessionId, tab, dir) => {
-          const view = (() => {
-            try { return terminals.view(sessionId, tab.id, tab.contentId, undefined, undefined) } catch { return undefined }
-          })()
-          if (view === undefined || view.state === undefined) {
-            setError(t('files.terminal.noInput'))
-            return
-          }
-          const command = `cd ${shellQuotePath(dir)}\r`
-          let settled = false
-          let unsubscribe = () => {}
-          let timer = null
-          const finish = (after) => {
-            if (settled) return
-            settled = true
-            if (timer !== null) clearTimeout(timer)
-            try { unsubscribe() } catch { /* 退订失败无所谓 */ }
-            if (after !== undefined) after()
-          }
-          const onChange = () => {
-            let state
-            try { state = view.state.getSnapshot() } catch { return }
-            if (state?.writable === true) {
-              try { view.write(command) } catch {
-                finish(() => { if (aliveRef.current) setError(t('files.terminal.noInput')) })
-                return
-              }
-              finish(() => { if (aliveRef.current) showNotice(t('files.terminal.done', { path: dir }), 'ok') })
+          await openTerminalAt(ctx, dir, element, t, (result) => {
+            if (result.ok === true) {
+              notify(t('files.terminal.done', { path: result.dir }), 'ok')
               return
             }
-            // 失败 / 已关闭：终端页签自己会显示原因（例如超了终端数量上限），这里不再叠一条横幅。
-            if (state?.phase === 'failed' || state?.phase === 'closed') finish()
-          }
-          timer = setTimeout(() => {
-            finish(() => { if (aliveRef.current) setError(t('files.terminal.timeout')) })
-          }, TERMINAL_READY_MS)
-          try {
-            unsubscribe = view.state.subscribe(onChange)
-          } catch {
-            finish()
-            return
-          }
-          onChange()
+            notify(t(result.key), 'error', true)
+          })
         }
 
         /** 换一块内部剪贴板：模块级那份是真相，`setClipboard` 只是让界面跟上。 */
@@ -3666,7 +3821,7 @@ window.__ModuleLoader__.load({
           type: 'button',
           className: 'dsh-we-open',
           'data-workspace-editor-files-notice-dismiss': '',
-          onClick: () => { setNotice(null) },
+          onClick: () => { dismissNotice() },
         }, t('files.cancel'))),
         pending !== null && h('p', {
           className: 'dsh-wef-banner',
