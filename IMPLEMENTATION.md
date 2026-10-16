@@ -229,12 +229,16 @@ route(ctx, req, res, endpoint)
   'workspace-editor', paneId })` —— 带上**本面板所在 pane**、不带 `replaceTab`，所以面板不会被
   顶掉，同一栏里多一张编辑器页签（同一个文件已经有编辑器页签时按 reveal 语义聚焦它）。
 - **页脚（插件信息）**：面板最底部固定一行 `标题 · v版本`，来源是 Host 的插件清单
-  （`ctx.remote.pluginManager.listBundles()`，按包名认领自己那一行；标题走
-  `locale.resolveText` 解析本地化文本）。**客户端不写死版本号** —— 写死就要跟 `package.json`
-  的 `version` 手动同步，迟早对不上；读接口本来就走官方生成的 Remote（与工作区文件的读同一条路）。
+  （`listBundles()`，按包名认领自己那一行；标题走 `locale.resolveText` 解析本地化文本）。
+  **客户端不写死版本号** —— 写死就要跟 `package.json` 的 `version` 手动同步，迟早对不上；
+  读接口本来就走官方生成的 Remote（与工作区文件的读同一条路）。
+  **命名空间必须用 `ctx.get('remote.pluginManager')` 取**：它是 cordis 服务，没在 `inject` 里
+  声明就写 `ctx.remote.pluginManager` 会抛「cannot get property … without inject」（cordis 4.0.4
+  实测），而这个 catch 一吃掉就变成「页脚只剩包名」的静默失效；反过来把它写进 `inject` 又是硬依赖，
+  没有插件管理器的部署里整个插件都会卡在等待中不加载。所以：可选能力走 `ctx.get`，拿不到就兜底。
   整条路径都是「拿不到就不显示版本」：没有插件管理器、远程门禁挡住、返回里没有这一行，页脚就只
-  显示包名，绝不让一行归属信息把面板搞坏。清单**一个页面只问一次**（模块级 promise 缓存），
-  同屏多个面板共用同一份结果。
+  显示包名，绝不让一行归属信息把面板搞坏。清单**读到才缓存**（一个页面只问一次），同屏多个面板
+  共用同一份结果；读失败不缓存，下次开面板再试。
 
 浏览器侧对应删除的「两次点击 + 版本闸」：第一下点击抓一份当前版本（`workspaceFiles.stat`），第二下
 才带着它发请求；Host 判不过就回 `stale-version`，UI 只提示、改成「仍然删除」让用户再点一次。

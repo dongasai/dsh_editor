@@ -160,6 +160,14 @@ Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵�
       React 渲染 `false` = 什么都不画 —— **白屏且控制台没有报错**。`node --check` 只验语法，
       这种语义错误它看不见：改完用 `node -e` + acorn 确认那个 `return` 仍是 `CallExpression`。
 
+20. **跨插件的 cordis 服务 / 命名空间一律用 `ctx.get('remote.<ns>')` 取，不要写进 `inject`**：
+    命名空间是 cordis **服务**，没在 `inject` 里声明就写 `ctx.remote.<ns>` 会直接抛
+    「cannot get property "remote.<ns>" without inject」（cordis 4.0.4 实测）；被 try/catch 吃掉
+    就变成「功能静默失效」（真踩过：面板页脚读不到版本，只剩包名）。而写进 `inject` 又是硬依赖 ——
+    没有那个服务的部署里整个插件会卡在等待中，编辑器与面板全都不出来。本插件的 `inject` 只列
+    自己**必需**的服务（`remote.workspaceFiles` 是编辑器读盘必需的）；可选的（如
+    `remote.pluginManager`）一律 `ctx.get(...)`，拿不到就退回兜底表现。
+
 ## 代码风格
 
 - 中文 JSDoc（`@param` / `@returns` / `@throws`）；注释解释**为什么** —— 尤其是反直觉的取舍
@@ -211,8 +219,8 @@ node --check client.js
   同步同文件的「「文件编辑」面板：浏览器侧的设计」。
 - 动「文件编辑」面板的页脚（插件信息）→ 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的
   「「文件编辑」面板：浏览器侧的设计」那一节与 README 面板一节：页脚走 `pluginInfo`
-  （Remote 现读 + 模块级缓存），**不要在客户端写死版本号**；改 `package.json` 的 `version`
-  因此不需要动客户端。
+  （`ctx.get('remote.pluginManager')` 现读 + 读到才缓存），**不要在客户端写死版本号**，也
+  **不要**把命名空间写进 `inject`（见约束 20）；改 `package.json` 的 `version` 因此不需要动客户端。
 - 动 Host 侧的闸 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「一次保存的完整路径」
   （五条路由那张图）、「删除 / 改名 / 建目录 / 复制为什么走 `node:fs`」与「四条实现约束」。
 - 已知边界（1 MiB 编辑上限、高亮 256 KiB / 2 万令牌上限与 Custom Highlight API 前提、

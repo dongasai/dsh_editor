@@ -2255,38 +2255,60 @@ window.__ModuleLoader__.load({
     /** 变更帧到达后合并成一次重列的等待时间（毫秒）。 */
     const WATCH_DEBOUNCE_MS = 120
 
-    /** 本插件的展示信息（标题 / 版本 / 描述）从 Host 插件清单里读，一个页面只读一次。 */
-    let pluginInfoPromise = null
+    /** 读到的插件信息（读到才缓存；读不到不缓存，下次开面板再试）。 */
+    let pluginInfoValue = null
+
+    /** 正在读的那一次（同屏多个面板同时挂载时共用同一次请求）。 */
+    let pluginInfoInFlight = null
 
     /**
-     * 读本插件的展示信息：`ctx.remote.pluginManager.listBundles()` 里按包名认领自己那一行。
+     * 读本插件的展示信息：Host 插件清单里按包名认领自己那一行。
      *
-     * 为什么走 Remote 现读而不是在客户端写死版本号：写死就要跟 `package.json` 的 `version`
-     * 手动同步，迟早对不上；读接口本来就用官方生成的 Remote（与工作区文件的读同一条路）。
-     * 拿不到（部署里没有插件管理器、远程门禁挡住、或返回里没有这一行）就返回 null ——
-     * 页脚退回只显示包名，绝不让「信息」把面板搞坏。
+     * 两处刻意：
+     *
+     * 1. **命名空间必须用 `ctx.get('remote.pluginManager')` 取** —— 不能写
+     *    `ctx.remote.pluginManager`，更**不能**把它加进插件的 `inject`。命名空间是一个 cordis
+     *    **服务**：没在 `inject` 里声明就访问会直接抛
+     *    「cannot get property "remote.pluginManager" without inject」（cordis 4.0.4 实测，
+     *    错误被下面的 catch 吃掉，页脚就只剩包名 —— 真踩过）；而写进 `inject` 等于硬依赖
+     *    「这个部署必须有插件管理器」，没有时**整个插件**会卡在等待里，编辑器与面板全都不出来。
+     *    `ctx.get` 是不做可访问性检查的取值口，拿不到就是 undefined。
+     * 2. **读失败不缓存**：启动早期命名空间可能还没挂上，下次开面板重试即可。
      * @param ctx - 客户端根上下文。
      * @returns `{ title, version, description }`（字段缺失时为 null），或 null。
      */
     function pluginInfo(ctx) {
-      if (pluginInfoPromise === null) {
-        pluginInfoPromise = (async () => {
-          try {
-            const result = await ctx.remote.pluginManager?.listBundles?.()
-            if (result?.ok !== true || !Array.isArray(result.value)) return null
-            const row = result.value.find((item) => item?.name === PACKAGE_NAME)
-            if (row === undefined) return null
-            return {
-              title: pluginText(ctx, row.meta?.title),
-              version: typeof row.version === 'string' && row.version !== '' ? row.version : null,
-              description: pluginText(ctx, row.meta?.description),
-            }
-          } catch {
-            return null
-          }
-        })()
+      if (pluginInfoValue !== null) return Promise.resolve(pluginInfoValue)
+      if (pluginInfoInFlight === null) {
+        pluginInfoInFlight = readPluginInfo(ctx).then((value) => {
+          pluginInfoInFlight = null
+          pluginInfoValue = value
+          return value
+        })
       }
-      return pluginInfoPromise
+      return pluginInfoInFlight
+    }
+
+    /**
+     * 真正去问一次 Host；任何失败都返回 null，绝不抛。
+     * @param ctx - 客户端根上下文。
+     * @returns 同 `pluginInfo`。
+     */
+    async function readPluginInfo(ctx) {
+      try {
+        const manager = ctx.get('remote.pluginManager')
+        const result = await manager?.listBundles?.()
+        if (result?.ok !== true || !Array.isArray(result.value)) return null
+        const row = result.value.find((item) => item?.name === PACKAGE_NAME)
+        if (row === undefined) return null
+        return {
+          title: pluginText(ctx, row.meta?.title),
+          version: typeof row.version === 'string' && row.version !== '' ? row.version : null,
+          description: pluginText(ctx, row.meta?.description),
+        }
+      } catch {
+        return null
+      }
     }
 
     /**
