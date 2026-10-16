@@ -68,8 +68,9 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
 `inputTargets` / `filesClipboard` / `CSS`）→ 文案 `zh` / `en` → 地址与纯工具
 （`addressParts` / `parseSessionFileAddress` / `absoluteFileAddress` / `fileNameOf` / `paneTarget` /
 `relativizeToCwd` / `lineNumberOf` / `lineReferenceToken` / `menuAnchorFor` / `sessionCwd` /
-`writeClipboard` / `readClipboard`）→ **粘贴纯函数区**（`/* paste:start */` …
-`/* paste:end */`：`PASTE_EXTENSIONS` / `base64OfBytes` / `pastedNameFor` / `clipboardFilesOf`）→
+`writeClipboard` / `readClipboard`）→ **粘贴 / 终端命令纯函数区**（`/* paste:start */` …
+`/* paste:end */`：`PASTE_EXTENSIONS` / `base64OfBytes` / `pastedNameFor` / `clipboardFilesOf` /
+`shellQuotePath`）→
 **语法高亮区**（`/* highlight:start */` …
 `/* highlight:end */`：上限常量 / 高亮名映射 / 关键字表 / 各语言规则表 / `keywordSource` /
 `clikeRules` / `makeScanner` / `scannerFor` / `languageOfPath` / `normalizeNewlines` /
@@ -78,7 +79,7 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
 Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵）→
 `createEditor(ctx)`（`EditorSurface` / `DocumentBody` / `PaneBody` / `EditAction` / `DeleteAction`）
 → `createFilesPanel(ctx)`（`FilesPanel` / `FilesTree`：目录树 + 内部剪贴板 / 系统剪贴板粘贴 +
-菜单里的 `copyPath` / `showNotice`）→
+菜单里的 `copyPath` / `openInTerminal`+`sendCdInto` / `showNotice`）→
 `inject` + `apply`（编辑 / 删除按钮注册在
 同一个槽位，id 与 order 各一档；「文件编辑」是页签类型 + `sidebar.right.pane.tab` 正文 + 快捷键
 + 输入框哨兵）。
@@ -214,8 +215,8 @@ node --check client.js
 归属；几何部分（高亮层与 textarea 逐字符坐标一致、wrap 开 / 关、滚到底部）只能在浏览器里量 ——
 用真 React 把真 `client.js` 挂到无头 Chrome 里，拿 textarea 的镜像逐点比坐标。
 
-动了粘贴：`/* paste:start */` … `/* paste:end */` 之间同样是**纯函数**（`base64OfBytes` /
-`pastedNameFor` / `clipboardFilesOf` / `PASTE_EXTENSIONS`），整段截出来在 Node 里断言「与
+动了粘贴 / 终端命令：`/* paste:start */` … `/* paste:end */` 之间同样是**纯函数**（`base64OfBytes` /
+`pastedNameFor` / `clipboardFilesOf` / `PASTE_EXTENSIONS` / `shellQuotePath`），整段截出来在 Node 里断言「与
 `Buffer` 的 base64 逐例一致（含 0x8000 分块边界）」「无名文件的命名」「从 `ClipboardEvent` 里
 挑文件 / 认目录」。组件那一层（菜单、Ctrl+C/X/V、工具条、剪贴板横幅）用**真 jsdom + 真 React**
 把真 `client.js` 挂起来跑同一份断言脚本；本机 Chrome 在 DSH 的 bwrap 沙箱里起不来，真浏览器 +
@@ -259,6 +260,9 @@ node --check client.js
   的设计」里那条粘贴说明与 README 的排错表 / 已知边界 / 手工清单。
 - 动 tree 的菜单动作（复制路径这类只写系统剪贴板的动作）→ 同样同步上面两处；菜单项一律走
   `menuItem()` 一处声明，别只为右键菜单再写一份（约束 16）。
+- 动「在终端打开」→ 先确认官方那三条契约没变（`remote.terminal.create` **没有 cwd**、
+  `TerminalView.write` 在不可写时**静默丢弃**、页签身份只能从 `active()` / `tabsIn()` 现读）；
+  变了就同步 README 的用法一段 / 排错表 / 已知边界与 IMPLEMENTATION 的面板一节。
 - 已知边界（1 MiB 编辑上限、高亮 256 KiB / 2 万令牌上限与 Custom Highlight API 前提、
   面板页脚的插件信息依赖 Host 的插件清单（读不到就只显示包名）、没有行号 /
   查找替换 / 多文件、页签顶替而非就地切换、官方文件树仍只读、
@@ -267,7 +271,8 @@ node --check client.js
   发送目标恒为当前会话、右键菜单替代原生文本框菜单、插入不聚焦输入框、
   粘贴只收文件且单个 4 MiB 上限、纯文本粘贴不处理、剪贴板里的目录不支持、菜单那条粘贴路丢失
   文件名、内部剪贴板只在内存里且换会话粘贴会被 403 挡下、复制相对路径的基准是工作区根且根
-  自己没有行）写在 README 末尾；
+  自己没有行、侧边栏终端一律从工作区根起步（所以「在终端打开」是开完替你敲一条 `cd`，且会往
+  shell 发一次输入）、自动 cd 的引号只保证 POSIX shell 与 PowerShell）写在 README 末尾；
   **没真正解决之前不要从文档里删掉**。
 - **文档分工别混**：README 只回答「怎么用」（用户视角的问题进排错表 / 已知边界），
   IMPLEMENTATION 只回答「为什么」；别让 README 重新长出实现细节。

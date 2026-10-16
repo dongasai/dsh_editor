@@ -376,6 +376,12 @@ window.__ModuleLoader__.load({
       'files.copyPathRelative': '复制相对路径',
       'files.copyPath.done': '已复制：{path}',
       'files.copyPath.failed': '浏览器不让写剪贴板，路径没有复制。手动选中再复制吧。',
+      'files.openTerminal': '在终端打开',
+      'files.terminal.done': '已在终端打开：{path}',
+      'files.terminal.missing': '这个部署没有侧边栏终端（终端页签类型没注册）。',
+      'files.terminal.failed': '没能打开终端页签。',
+      'files.terminal.noInput': '终端开了，但拿不到它的输入面，没能切到该目录。',
+      'files.terminal.timeout': '终端开了，但等它可写超时，没能自动切到该目录。',
       'delete.stale': '文件已变更，未删除',
       'delete.noVersion': '读不到文件状态',
       'conflict.stale': '磁盘上的文件在编辑期间变过，尚未覆盖。',
@@ -486,6 +492,12 @@ window.__ModuleLoader__.load({
       'files.copyPathRelative': 'Copy relative path',
       'files.copyPath.done': 'Copied: {path}',
       'files.copyPath.failed': 'The browser refused clipboard access; the path was not copied.',
+      'files.openTerminal': 'Open in terminal',
+      'files.terminal.done': 'Opened in the terminal: {path}',
+      'files.terminal.missing': 'This deployment has no sidebar terminal (no terminal tab type is registered).',
+      'files.terminal.failed': 'The terminal tab could not be opened.',
+      'files.terminal.noInput': 'The terminal opened, but its input was unavailable; the directory was not entered.',
+      'files.terminal.timeout': 'The terminal opened, but it did not become writable in time; the directory was not entered.',
       'delete.stale': 'File changed, not deleted',
       'delete.noVersion': 'File state unavailable',
       'conflict.stale': 'The file changed on disk while you were editing; nothing was overwritten.',
@@ -749,7 +761,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /* paste:start —— 粘贴的纯函数（不碰 React / DOM 状态）。调试脚本按这两个标记截出来单独跑。 */
+    /* paste:start —— 粘贴与终端命令的纯函数（不碰 React / DOM 状态）。调试脚本按这两个标记截出来单独跑。 */
 
     /**
      * 剪贴板里的 MIME → 文件后缀。
@@ -800,6 +812,19 @@ window.__ModuleLoader__.load({
       const stamp = `${String(at.getFullYear())}${pad(at.getMonth() + 1)}${pad(at.getDate())}`
         + `-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`
       return `pasted-${stamp}${index > 1 ? `-${String(index)}` : ''}.${extension}`
+    }
+
+    /**
+     * 给一条路径加 shell 引号（「在终端打开」自动 `cd` 用）。
+     *
+     * 用**单引号**：它在 POSIX shell 与 PowerShell 里都是字面量，能挡住 `$`、反引号、空格的展开；
+     * 单引号自身按 POSIX 的写法收尾再拼（`'` → `'\''`）。cmd.exe 不吃单引号 —— 这条前提写在
+     * README 的已知边界里（那些平台上默认 shell 是 PowerShell，够用）。
+     * @param path - 绝对路径。
+     * @returns 可以直接拼进一行命令的带引号路径。
+     */
+    function shellQuotePath(path) {
+      return `'${path.split("'").join("'\\''")}'`
     }
 
     /**
@@ -860,6 +885,7 @@ window.__ModuleLoader__.load({
       ],
       paste: ['M4.6 3.8h6.8v9.6H4.6z', 'M6.6 3.8V2.4h2.8v1.4', 'M6.4 7.2h3.2', 'M6.4 9.6h3.2'],
       path: ['M5.6 3 10.4 13', 'M3.2 6.2h.01', 'M12.8 9.8h.01'],
+      terminal: ['M2.6 3.4 6.4 7.8 2.6 12.2', 'M8.6 12.4h4.8'],
       trash: ['M2.8 4.6h10.4', 'M6.3 4.6V2.9h3.4v1.7', 'M4.4 4.6l.7 9.1h5.8l.7-9.1'],
       refresh: ['M13 8a5 5 0 1 1-1.7-3.7', 'M13.3 2.6v3.2h-3.2'],
       open: ['M2.5 12.5V6h6.5l-2.4 2.4', 'M6.6 3.5h6v6'],
@@ -2425,6 +2451,21 @@ window.__ModuleLoader__.load({
     /** 一次性提示（「已复制路径」这类没有落盘副作用的回话）在屏幕上留多久。 */
     const NOTICE_MS = 6000
 
+    /**
+     * 侧边栏终端页类型注册的 kind。与官方 `@deepseek-ai/dsh-client-ui-sidebar-terminal`
+     * 逐字一致 —— 它不是我们的类型，我们只是按这个 kind 请侧边栏开一个终端页签。
+     */
+    const TERMINAL_KIND = 'terminal'
+
+    /** 开完终端页签后，等它出现在页签清单里的上限（毫秒）。 */
+    const TERMINAL_TAB_MS = 2000
+
+    /**
+     * 等新终端「变成可写」的上限（毫秒）。到了就放弃自动 cd —— 终端本身已经开着，用户自己敲一条
+     * 也一样；但不能不吭声（见 `files.terminal.timeout`）。
+     */
+    const TERMINAL_READY_MS = 15000
+
     /** 读到的插件信息（读到才缓存；读不到不缓存，下次开面板再试）。 */
     let pluginInfoValue = null
 
@@ -2964,6 +3005,147 @@ window.__ModuleLoader__.load({
           showNotice(t('files.copyPath.done', { path: text }), 'ok')
         }
 
+        /**
+         * 「在终端打开」：请侧边栏开一个终端页签，等它的 shell 变成可写了，再替用户敲一条 `cd`。
+         *
+         * **为什么不是「让终端在该目录启动」**：官方 `remote.terminal.create` 只收 `shellPath`
+         * （没有 cwd），页签 params 也只有 `terminalId` / `shellPath` —— 侧边栏终端一律从**会话
+         * 工作区根**起步。所以目录只能靠开完再敲一条 `cd` 带过去；`TerminalView.write()` 在
+         * **不可写时是静默丢弃**的（官方实现开头就是 `if (!state.writable …) return`），因此必须
+         * 等 `state.writable === true`，不能抢跑。
+         *
+         * 三条不假设：
+         * 1. 终端页类型可能没注册（部署里没有这套 UI）→ 先问 `sidebarRightTabs.entries()`。
+         * 2. `webTerminals` 是跨插件服务 → 一律 `ctx.get`，不进 `inject`（约束 20），拿不到就明说。
+         * 3. 页签身份只能从公开的 `active()` / `tabsIn()` 现读（布局 store 推过来有延迟）→ 轮询取
+         *    差集，取不到就报「没能打开」，不猜。
+         * @param path - 被右键的那一行（文件行用它的父目录）。
+         * @param element - 触发这次动作的元素，交给 `commandTarget` 定位当前侧边栏页。
+         * @returns 请求处理完即返回。
+         */
+        const openInTerminal = async (path, element) => {
+          setError(null)
+          const registered = (() => {
+            try { return ctx.sidebarRightTabs.entries().some((entry) => entry.kind === TERMINAL_KIND) } catch { return false }
+          })()
+          if (!registered) {
+            setError(t('files.terminal.missing'))
+            return
+          }
+          const target = (() => {
+            try { return ctx.sidebarRight.commandTarget(element ?? null) } catch { return undefined }
+          })()
+          if (target === undefined) {
+            setError(t('files.terminal.failed'))
+            return
+          }
+          const dir = isDirPath(path) ? path : parentOf(path)
+          const before = new Set(tabsOfSession(target.sessionId).map((tab) => tab.id))
+          try {
+            ctx.sidebarRight.openTabFromTarget(TERMINAL_KIND, target)
+          } catch {
+            setError(t('files.terminal.failed'))
+            return
+          }
+          const tab = await waitForTerminalTab(target.sessionId, before)
+          if (tab === undefined) {
+            setError(t('files.terminal.failed'))
+            return
+          }
+          try { ctx.sidebarRight.focus(tab.id) } catch { /* 聚焦不了不影响后面的 cd */ }
+          const terminals = ctx.get('webTerminals')
+          if (terminals === undefined || typeof terminals.view !== 'function') {
+            setError(t('files.terminal.noInput'))
+            return
+          }
+          sendCdInto(terminals, target.sessionId, tab, dir)
+        }
+
+        /** 一个会话提交后的页签记录（公开接口 `tabsIn`；读不到就当没有）。 */
+        const tabsOfSession = (sessionId) => {
+          try { return ctx.sidebarRight.tabsIn(sessionId) ?? [] } catch { return [] }
+        }
+
+        /**
+         * 等刚开的终端页签出现。
+         *
+         * 先看公开的 `active()`（开页签会把选中挪过去，正常情况一次就命中），再拿 `tabsIn()` 的差集
+         * 兜底 —— 布局 store 是异步提交的，所以是轮询而不是读一次。
+         * @param sessionId - 在哪个会话里开。
+         * @param before - 开之前已有的页签 id。
+         * @returns 新终端页签，或 undefined。
+         */
+        const waitForTerminalTab = async (sessionId, before) => {
+          const until = Date.now() + TERMINAL_TAB_MS
+          for (;;) {
+            const active = (() => {
+              try { return ctx.sidebarRight.active() } catch { return undefined }
+            })()
+            if (active !== undefined && active.kind === TERMINAL_KIND && !before.has(active.id)) return active
+            const found = tabsOfSession(sessionId).find((tab) => tab.kind === TERMINAL_KIND && !before.has(tab.id))
+            if (found !== undefined) return found
+            if (Date.now() >= until) return undefined
+            await new Promise((resolve) => setTimeout(resolve, 50))
+          }
+        }
+
+        /**
+         * 等这个终端可写，然后把 `cd '<目录>'` 敲进去。
+         *
+         * 这个 watcher **刻意不随面板卸载而取消**：开了终端之后面板很可能被终端页签顶掉（聚焦会切
+         * 页签），而这时的 cd 还没发出去。它自己在三个出口收尾 —— 可写（写一次）、失败 / 关闭
+         * （不吭声：终端页签自己会显示失败原因）、超时（横幅说明）。只有 setState 受 `aliveRef` 守卫。
+         * @param terminals - 客户端的 `webTerminals` 服务。
+         * @param sessionId - 会话 id。
+         * @param tab - 刚开的终端页签记录。
+         * @param dir - 要切过去的目录（绝对路径）。
+         * @returns 无。
+         */
+        const sendCdInto = (terminals, sessionId, tab, dir) => {
+          const view = (() => {
+            try { return terminals.view(sessionId, tab.id, tab.contentId, undefined, undefined) } catch { return undefined }
+          })()
+          if (view === undefined || view.state === undefined) {
+            setError(t('files.terminal.noInput'))
+            return
+          }
+          const command = `cd ${shellQuotePath(dir)}\r`
+          let settled = false
+          let unsubscribe = () => {}
+          let timer = null
+          const finish = (after) => {
+            if (settled) return
+            settled = true
+            if (timer !== null) clearTimeout(timer)
+            try { unsubscribe() } catch { /* 退订失败无所谓 */ }
+            if (after !== undefined) after()
+          }
+          const onChange = () => {
+            let state
+            try { state = view.state.getSnapshot() } catch { return }
+            if (state?.writable === true) {
+              try { view.write(command) } catch {
+                finish(() => { if (aliveRef.current) setError(t('files.terminal.noInput')) })
+                return
+              }
+              finish(() => { if (aliveRef.current) showNotice(t('files.terminal.done', { path: dir }), 'ok') })
+              return
+            }
+            // 失败 / 已关闭：终端页签自己会显示原因（例如超了终端数量上限），这里不再叠一条横幅。
+            if (state?.phase === 'failed' || state?.phase === 'closed') finish()
+          }
+          timer = setTimeout(() => {
+            finish(() => { if (aliveRef.current) setError(t('files.terminal.timeout')) })
+          }, TERMINAL_READY_MS)
+          try {
+            unsubscribe = view.state.subscribe(onChange)
+          } catch {
+            finish()
+            return
+          }
+          onChange()
+        }
+
         /** 换一块内部剪贴板：模块级那份是真相，`setClipboard` 只是让界面跟上。 */
         const armClipboard = (next) => {
           filesClipboard = next
@@ -3190,7 +3372,7 @@ window.__ModuleLoader__.load({
          * @param icon - `ICON_PATHS` 里的图标名。
          * @param path - 这一项作用的路径。
          * @param label - 文案；`null` 表示这一项不由这个入口提供（不出现在菜单里）。
-         * @param run - 点下去干什么。
+         * @param run - 点下去干什么；拿得到点击事件（`commandTarget` 要按触发元素定位侧边栏页）。
          * @param hidden - true 时这一项不渲染（类型不适用）。
          * @param danger - true 时用错误色（删除）。
          * @returns 菜单项，或 null。
@@ -3207,7 +3389,7 @@ window.__ModuleLoader__.load({
             onClick: (event) => {
               event.stopPropagation()
               setMenu(null)
-              run()
+              run(event)
             },
           }, glyph(icon, 14), label)
         }
@@ -3582,6 +3764,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dsh-wef-menu-sep', key: 'sep-paths' }),
         menuItem('copy-path', 'path', menu.path, t('files.copyPath'), () => { void copyPath(menu.path, false) }, false),
         menuItem('copy-path-relative', 'path', menu.path, t('files.copyPathRelative'), () => { void copyPath(menu.path, true) }, false),
+        menuItem('open-terminal', 'terminal', menu.path, t('files.openTerminal'), (event) => { void openInTerminal(menu.path, event?.currentTarget ?? null) }, false),
         menuItem('delete', 'trash', menu.path, t('files.delete'), () => { void armDelete(menu.path, menu.type) }, false, true)),
         busy !== null && h('p', { className: 'dsh-wef-status', 'data-workspace-editor-files-busy': '' }, t('files.busy')),
         // 剪贴板横幅：不是「正在处理」，而是「贴的时候会贴什么」，所以单独一行、带一个清空按钮。

@@ -252,6 +252,17 @@ route(ctx, req, res, endpoint)
      `POST /upload`：base64 → `writeFile(wx)` 建**新文件**，绝不覆盖。
   `paste` 事件只处理文件：纯文本一律不 `preventDefault`（往这棵树里贴文本没有去处），剪贴板里
   的**目录**明确说不支持 —— 浏览器拿得到目录入口、拿不到它的内容（这条也写进了 README 的已知边界）。
+- **在终端打开**：官方 `remote.terminal.create` 只有 `shellPath`（**没有 cwd**），页签 params 也只有
+  `terminalId` / `shellPath` —— 侧边栏终端一律从会话工作区根起步，所以「在该目录打开」只能做成
+  「开页签 → 等 `state.writable` → `view.write("cd '<目录>'\r")`」。三个必须按官方实现来的点：
+  ①`TerminalView.write()` 在**不可写时静默丢弃**（官方实现开头就是 `if (!state.writable …) return`），
+  抢跑等于什么都没发生，所以订阅 `view.state` 等 `writable === true` 且**只写一次**；
+  ②页签身份只能从公开的 `ctx.sidebarRight.active()` / `tabsIn()` 现读（布局 store 是异步提交的），
+  所以是轮询取差集，取不到就报「没能打开」而不是猜一个 id；
+  ③终端类型、`webTerminals` 都可能不在（部署裁剪 / 别的宿主）—— 前者先问
+  `ctx.sidebarRightTabs.entries()`，后者一律 `ctx.get('webTerminals')`（约束 20），拿不到就明说。
+  watcher 刻意**不随面板卸载取消**：开了终端之后面板很可能被聚焦的终端页签顶掉，而 cd 还没发出去；
+  它自己在「可写 / 失败·关闭 / 超时」三个出口收尾，失败不叠第二条横幅（终端页签自己会显示原因）。
 - **复制路径 / 复制相对路径**：菜单项只做一件事 —— 把路径写进系统剪贴板。两个刻意的选择：
   ①「相对」是相对**这个面板的根**（= 会话 cwd），不是相对当前展开的目录，因为贴出去多半是给
   终端或别的工具用，基准越稳定越好；根本身没有行，代码里那条 `path === root → '.'` 只是防御。
@@ -457,6 +468,13 @@ React 卸载整棵子树 —— 编辑器白屏（探针抓到的真 bug）。�
 > 则用**无头 Chrome + 真 React** 把真 `client.js` 挂起来量（高亮层与 textarea 的镜像逐字符比坐标、
 > 顶部与底部各比一次、wrap 开 / 关各一遍）。探针抓到过两个真 bug：能力探测被自己的 `const CSS`
 > 遮蔽、`Range` 边界传了元素节点（后者会让编辑器白屏）。
+>
+> 加「在终端打开」时：同样真 jsdom + 真 React 挂整块面板，终端那半边用桩（只实现公开契约里的
+> 那几个方法：`entries` / `commandTarget` / `tabsIn` / `active` / `openTabFromTarget` / `focus` /
+> `webTerminals.view().state` / `write`），断言的是**我们这一侧的时序**：不可写时一个字都不发、
+> `writable` 后只写一次、命令是 `cd '<绝对路径>'\r`、带空格与单引号的路径转义正确、文件行走父目录、
+> 拿到新页签身份后聚焦它、终端类型缺失 / `webTerminals` 缺失 / 终端自己失败 / 一直不可写这四条
+> 分支各自的说法，53 条全绿（含「复制路径」与整个菜单的回归）。
 >
 > 加「复制路径」时：真 jsdom + 真 React 挂整块面板，用**真 `contextmenu` 事件**打开右键菜单，
 > 断言剪贴板里拿到的文本（文件 / 目录 / 相对 / 绝对 / 根没有行）、成功提示与它的 6 秒过期、
