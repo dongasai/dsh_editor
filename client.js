@@ -85,8 +85,14 @@
  * [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「语法高亮」一节。
  */
 
+/**
+ * 插件包名。两个用处：`__ModuleLoader__.load` 的 id，以及「文件编辑」面板页脚的归属信息
+ * （页脚要按它去 Host 的插件清单里认领自己的版本号）—— 只此一份字面量。
+ */
+const PACKAGE_NAME = '@dongasai/dsh-editor'
+
 window.__ModuleLoader__.load({
-  id: '@dongasai/dsh-editor',
+  id: PACKAGE_NAME,
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -242,6 +248,8 @@ window.__ModuleLoader__.load({
 .dsh-wef-note{margin:0;padding:3px 10px;color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dsh-wef-input{width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:2px 6px;border-radius:var(--dsw-radius-sm,6px);border:.5px solid var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);outline:none}
 .dsh-wef-status{flex:none;padding:6px 10px;border-top:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:12px}
+.dsh-wef-gap{flex:1 1 auto}
+.dsh-wef-plugin{flex:none;margin:0;padding:6px 10px;border-top:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 `
 
     /** 界面文案。 */
@@ -2247,6 +2255,56 @@ window.__ModuleLoader__.load({
     /** 变更帧到达后合并成一次重列的等待时间（毫秒）。 */
     const WATCH_DEBOUNCE_MS = 120
 
+    /** 本插件的展示信息（标题 / 版本 / 描述）从 Host 插件清单里读，一个页面只读一次。 */
+    let pluginInfoPromise = null
+
+    /**
+     * 读本插件的展示信息：`ctx.remote.pluginManager.listBundles()` 里按包名认领自己那一行。
+     *
+     * 为什么走 Remote 现读而不是在客户端写死版本号：写死就要跟 `package.json` 的 `version`
+     * 手动同步，迟早对不上；读接口本来就用官方生成的 Remote（与工作区文件的读同一条路）。
+     * 拿不到（部署里没有插件管理器、远程门禁挡住、或返回里没有这一行）就返回 null ——
+     * 页脚退回只显示包名，绝不让「信息」把面板搞坏。
+     * @param ctx - 客户端根上下文。
+     * @returns `{ title, version, description }`（字段缺失时为 null），或 null。
+     */
+    function pluginInfo(ctx) {
+      if (pluginInfoPromise === null) {
+        pluginInfoPromise = (async () => {
+          try {
+            const result = await ctx.remote.pluginManager?.listBundles?.()
+            if (result?.ok !== true || !Array.isArray(result.value)) return null
+            const row = result.value.find((item) => item?.name === PACKAGE_NAME)
+            if (row === undefined) return null
+            return {
+              title: pluginText(ctx, row.meta?.title),
+              version: typeof row.version === 'string' && row.version !== '' ? row.version : null,
+              description: pluginText(ctx, row.meta?.description),
+            }
+          } catch {
+            return null
+          }
+        })()
+      }
+      return pluginInfoPromise
+    }
+
+    /**
+     * 解析插件清单里的本地化文本（`string | { en, [locale] }`）。
+     * @param ctx - 客户端根上下文。
+     * @param text - `LocalizedText`，或 undefined。
+     * @returns 当前语言的文本，或 null。
+     */
+    function pluginText(ctx, text) {
+      if (text === undefined || text === null) return null
+      try {
+        const resolved = ctx.locale.resolveText(text)
+        return typeof resolved === 'string' && resolved !== '' ? resolved : null
+      } catch {
+        return typeof text === 'string' && text !== '' ? text : null
+      }
+    }
+
     /**
      * 造出「文件编辑」面板（页签类型 + 自带文件树）。
      *
@@ -2313,6 +2371,30 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * 面板页脚：插件信息（标题 + 版本），永远贴在面板最底部。
+       *
+       * 信息来自 Host 的插件清单（见 `pluginInfo`），读不到就退回包名 —— 页脚只是归属说明，
+       * 绝不能因为它把面板搞坏，所以整条路径都是「拿不到就不显示版本」。
+       * @returns 页脚那一行。
+       */
+      function FilesFooter() {
+        const [info, setInfo] = React.useState(null)
+        React.useEffect(() => {
+          let alive = true
+          void pluginInfo(ctx).then((value) => { if (alive) setInfo(value) })
+          return () => { alive = false }
+        }, [])
+        const version = info === null ? null : info.version
+        const title = info === null || info.title === null ? PACKAGE_NAME : info.title
+        return h('p', {
+          className: 'dsh-wef-plugin',
+          title: info !== null && info.description !== null ? info.description : `${PACKAGE_NAME}${version === null ? '' : ` v${version}`}`,
+          'data-workspace-editor-files-plugin': PACKAGE_NAME,
+          'data-workspace-editor-files-version': version ?? '',
+        }, version === null ? title : `${title} · v${version}`)
+      }
+
+      /**
        * 面板正文：会话工作区根 → 一层层列目录 → 行上做变更 → 单击文件开编辑器页签。
        * @param props - `sidebar.right.pane.tab` 交来的 props（`sessionId` / `useSessions` /
        *   `useTabInfo` / `t`）。
@@ -2325,7 +2407,9 @@ window.__ModuleLoader__.load({
         if (root === null) {
           return h('div', { className: 'dsh-wef-root', 'data-workspace-editor-files': 'no-root' },
             h('style', null, CSS),
-            h('p', { className: 'dsh-wef-note' }, t('files.noRoot')))
+            h('p', { className: 'dsh-wef-note' }, t('files.noRoot')),
+            h('div', { className: 'dsh-wef-gap' }),
+            h(FilesFooter, null))
         }
         // key：换会话 / 换工作区根就整棵树重挂，免得把上个工作区的列表与草稿留在屏幕上。
         return h(FilesTree, { ...props, root, key: `${sessionId}\u0000${root}` })
@@ -3030,7 +3114,8 @@ window.__ModuleLoader__.load({
         menuItem('rename', 'rename', menu.path, t('files.rename'), () => { startRename(menu.path) }, false),
         menuItem('copy', 'copy', menu.path, t('files.copy'), () => { void copyEntry(menu.path) }, menu.type !== 'file'),
         menuItem('delete', 'trash', menu.path, t('files.delete'), () => { void armDelete(menu.path, menu.type) }, false, true)),
-        busy !== null && h('p', { className: 'dsh-wef-status', 'data-workspace-editor-files-busy': '' }, t('files.busy')))
+        busy !== null && h('p', { className: 'dsh-wef-status', 'data-workspace-editor-files-busy': '' }, t('files.busy')),
+        h(FilesFooter, null))
       }
 
       return { FilesPanel, FilesTree }

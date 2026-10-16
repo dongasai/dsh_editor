@@ -209,9 +209,14 @@ node --check client.js
 - 动保存 / 冲突 / 草稿逻辑 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「数据不丢的四条
   规矩」；动删除按钮的状态机 → 同步同文件的「规矩 4：删除要两次点击」；动「文件编辑」面板 →
   同步同文件的「「文件编辑」面板：浏览器侧的设计」。
+- 动「文件编辑」面板的页脚（插件信息）→ 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的
+  「「文件编辑」面板：浏览器侧的设计」那一节与 README 面板一节：页脚走 `pluginInfo`
+  （Remote 现读 + 模块级缓存），**不要在客户端写死版本号**；改 `package.json` 的 `version`
+  因此不需要动客户端。
 - 动 Host 侧的闸 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「一次保存的完整路径」
   （五条路由那张图）、「删除 / 改名 / 建目录 / 复制为什么走 `node:fs`」与「四条实现约束」。
-- 已知边界（1 MiB 编辑上限、高亮 256 KiB / 2 万令牌上限与 Custom Highlight API 前提、没有行号 /
+- 已知边界（1 MiB 编辑上限、高亮 256 KiB / 2 万令牌上限与 Custom Highlight API 前提、
+  面板页脚的插件信息依赖 Host 的插件清单（读不到就只显示包名）、没有行号 /
   查找替换 / 多文件、页签顶替而非就地切换、官方文件树仍只读、
   删除永久且带毫秒级窗口、面板不做多选 / 不复制目录 / 不递归建中间目录、改名的预检窗口、递归
   删除只盖直接条目、`link:` 下 Host 半边要重启、草稿只在内存里、发送的是纯文本引用而非芯片、
