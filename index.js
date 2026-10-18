@@ -76,6 +76,12 @@ const COPY_PATH = '/workspace-editor/copy'
 /** 粘贴上传（base64 → 新文件）路由的路径；与客户端半边拼出的 URL 必须逐字一致。 */
 const UPLOAD_PATH = '/workspace-editor/upload'
 
+/** 内容搜索路由的路径；与客户端半边拼出的 URL 必须逐字一致。 */
+const SEARCH_PATH = '/workspace-editor/search'
+
+/** 批量列目录路由的路径；与客户端半边拼出的 URL 必须逐字一致。 */
+const LIST_BATCH_PATH = '/workspace-editor/list-batch'
+
 /** 一次保存的请求体上限（字节）。 */
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 
@@ -84,6 +90,17 @@ const MAX_CONTENT_CHARS = 4 * 1024 * 1024
 
 /** 单次粘贴上传的字节上限（解码后）。 */
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024
+
+/** 单次搜索的文件数上限（避免一次搜太多文件撑爆内存）。 */
+const MAX_SEARCH_FILES = 100
+
+/** 单次搜索每个文件的匹配行数上限。 */
+const MAX_MATCHES_PER_FILE = 10
+
+/**
+ * 批量列目录的文件数上限（显示在 F2 弹窗里的总条目数）。
+ */
+const MAX_LIST_BATCH_ENTRIES = 500
 
 /**
  * 粘贴上传的 base64 字段长度上限：4 MiB 字节编码后是 `ceil(4 MiB / 3) * 4`，先按字面量拦一道，
@@ -157,8 +174,8 @@ const NODE_FAILURES = {
 }
 
 /**
- * 六条变更路由：各自的路径、校验器、落盘实现，以及 500 时用的线上失败码。
- * 路由外壳（围栏 / 方法 / 媒体类型 / 生命周期 / 应答）六份共用。
+ * 八条变更路由：各自的路径、校验器、落盘实现，以及 500 时用的线上失败码。
+ * 路由外壳（围栏 / 方法 / 媒体类型 / 生命周期 / 应答）八份共用。
  */
 const ENDPOINTS = [
   { path: WRITE_PATH, failure: 'write-failed', parse: parseWriteRequest, run: writeWorkspaceFile },
@@ -167,6 +184,8 @@ const ENDPOINTS = [
   { path: RENAME_PATH, failure: 'rename-failed', parse: parseRenameRequest, run: renameWorkspaceEntry },
   { path: COPY_PATH, failure: 'copy-failed', parse: parseCopyRequest, run: copyWorkspaceEntry },
   { path: UPLOAD_PATH, failure: 'upload-failed', parse: parseUploadRequest, run: uploadWorkspaceFile },
+  { path: SEARCH_PATH, failure: 'search-failed', parse: parseSearchRequest, run: searchWorkspaceFiles },
+  { path: LIST_BATCH_PATH, failure: 'list-batch-failed', parse: parseListBatchRequest, run: listBatchDirectories },
 ]
 
 /** Cordis 插件名（Loader 诊断用）。 */
@@ -382,6 +401,46 @@ function parseUploadRequest(value) {
     throw new RequestError(413, 'too-large', `data exceeds the ${MAX_UPLOAD_BYTES}-byte paste limit`)
   }
   return { sessionId, path, bytes }
+}
+
+/**
+ * 解析并校验搜索请求体。
+ *
+ * 搜索在会话工作区内进行：**逐文件读取内容**（不订阅），用简单的子串匹配（不支持正则）。
+ * 返回每个文件的匹配预览（行号 + 上下文），但不返回全文 —— 避免单次响应过大。
+ *
+ * @param value - 反序列化后的 JSON 值。
+ * @returns 校验过的搜索意图。
+ * @throws {RequestError} 400 —— 字段类型不对或超限。
+ */
+function parseSearchRequest(value) {
+  if (!isPlainObject(value)) throw new RequestError(400, 'bad-request', 'body must be a JSON object')
+  const sessionId = requireString(value.sessionId, 'sessionId')
+  const pattern = requireString(value.pattern, 'pattern')
+  if (pattern.trim() === '') throw new RequestError(400, 'bad-request', 'pattern cannot be empty')
+  if (pattern.length > 256) throw new RequestError(400, 'bad-request', 'pattern too long')
+  const pathPrefix = value.pathPrefix === undefined ? '' : requireString(value.pathPrefix, 'pathPrefix')
+  const caseSensitive = typeof value.caseSensitive === 'boolean' ? value.caseSensitive : false
+  return { sessionId, pattern, pathPrefix, caseSensitive }
+}
+
+/**
+ * 解析并校验批量列目录请求体。
+ *
+ * @param value - 反序列化后的 JSON 值。
+ * @returns 校验过的列目录意图。
+ * @throws {RequestError} 400 —— 字段类型不对或超限。
+ */
+function parseListBatchRequest(value) {
+  if (!isPlainObject(value)) throw new RequestError(400, 'bad-request', 'body must be a JSON object')
+  const sessionId = requireString(value.sessionId, 'sessionId')
+  if (!Array.isArray(value.paths)) throw new RequestError(400, 'bad-request', 'paths must be an array')
+  if (value.paths.length === 0) throw new RequestError(400, 'bad-request', 'paths cannot be empty')
+  if (value.paths.length > 50) throw new RequestError(400, 'bad-request', 'too many paths')
+  for (const p of value.paths) {
+    if (typeof p !== 'string') throw new RequestError(400, 'bad-request', 'each path must be a string')
+  }
+  return { sessionId, paths: value.paths.slice(0, 50) }
 }
 
 /**
@@ -704,6 +763,133 @@ async function writeEntry(displayPath, absolutePath, bytes) {
   } catch (error) {
     throw nodeFailure(error, 'cannot write', displayPath)
   }
+}
+
+/**
+ * 在会话工作区内搜索文件内容（逐文件读取）。
+ *
+ * 这是**纯查询操作**，走 `list` + `read` 但不订阅；单次最多搜 `MAX_SEARCH_FILES` 个文件，
+ * 每个文件最多返回 `MAX_MATCHES_PER_FILE` 行预览，避免响应过大。
+ * @param ctx - Host 上下文。
+ * @param input - 校验过的搜索意图。
+ * @param signal - 取消信号。
+ * @returns 搜索结果数组（按文件分组，每组含匹配预览）。
+ * @throws {RequestError | Error} 失败时抛出带 code 的错误，交给 `sendFailure` 映射。
+ */
+async function searchWorkspaceFiles(ctx, input, signal) {
+  const { session, workspaceRoot } = await resolveSessionRoot(ctx, input.sessionId, signal)
+  
+  const policy = session === undefined ? ctx.sandboxPolicy.resolve() : ctx.sandboxPolicy.resolve({ session })
+  if (policy.mode === 'read-only') {
+    // 搜索是只读的，但为了安全仍然检查策略（防止有人在读不下做坏事）
+    // 这里实际上不需要拒绝，因为搜索不修改任何状态
+  }
+
+  const files = []
+  let count = 0
+  
+  async function walk(dir) {
+    if (count >= MAX_SEARCH_FILES) return
+    const entries = await ctx.fs.list(dir, { cwd: workspaceRoot, signal })
+    for (const entry of entries) {
+      if (count >= MAX_SEARCH_FILES) break
+      const fullPath = join(dir, entry.name)
+      const info = await ctx.fs.lstat(fullPath, { cwd: workspaceRoot, signal })
+      if (info?.type === 'directory') {
+        walk(fullPath)
+      } else if (info?.type === 'file') {
+        // 跳过二进制文件？这里简单处理：先尝试读文本，失败就跳过
+        try {
+          const content = await ctx.fs.readText(fullPath, { cwd: workspaceRoot, signal })
+          count += 1
+          const matches = findMatches(content, input.pattern, input.caseSensitive)
+          if (matches.length > 0) {
+            files.push({ path: fullPath, matches })
+          }
+        } catch (err) {
+          // 跳过无法作为文本读取的文件（二进制、编码错误等）
+          if (!signal.aborted && err.code !== 'not-text') {
+            ctx.logger.warn(`skipping file during search: ${fullPath}`, err)
+          }
+        }
+      }
+    }
+  }
+
+  const prefix = input.pathPrefix ? await ctx.fs.resolve(input.pathPrefix, { cwd: workspaceRoot, signal }) : workspaceRoot
+  await walk(prefix.toString())
+
+  return { ok: true, results: files, totalFiles: count }
+}
+
+/**
+ * 在一个字符串中查找所有匹配行（子串匹配，不支持正则）。
+ * @param content - 文件全文。
+ * @param pattern - 搜索模式。
+ * @param caseSensitive - 是否区分大小写。
+ * @returns 匹配行列表（最多 MAX_MATCHES_PER_FILE 条）。
+ */
+function findMatches(content, pattern, caseSensitive) {
+  if (!caseSensitive) {
+    content = content.toLowerCase()
+    pattern = pattern.toLowerCase()
+  }
+  const lines = content.split('\n')
+  const matches = []
+  for (let i = 0; i < lines.length && matches.length < MAX_MATCHES_PER_FILE; i++) {
+    const line = lines[i]
+    const target = caseSensitive ? line : line.toLowerCase()
+    if (target.includes(pattern)) {
+      matches.push({ lineNo: i + 1, line, preview: truncateLine(line) })
+    }
+  }
+  return matches
+}
+
+/**
+ * 截断过长的行（避免单行太长撑爆响应）。
+ */
+function truncateLine(line) {
+  return line.length > 200 ? line.slice(0, 200) + '…' : line
+}
+
+/**
+ * 批量列出多个目录的内容（扁平化，类似 `ls -R` 的简化版）。
+ *
+ * 这是**纯查询操作**，走 `list` 但不订阅；总条目数不超过 `MAX_LIST_BATCH_ENTRIES`。
+ * @param ctx - Host 上下文。
+ * @param input - 校验过的列目录意图。
+ * @param signal - 取消信号。
+ * @returns 每个目录的条目列表。
+ * @throws {RequestError | Error} 失败时抛出带 code 的错误，交给 `sendFailure` 映射。
+ */
+async function listBatchDirectories(ctx, input, signal) {
+  const results = []
+  let totalEntries = 0
+  
+  for (const dir of input.paths) {
+    if (totalEntries >= MAX_LIST_BATCH_ENTRIES) break
+    const resolved = await ctx.fs.resolve(dir, { cwd: ctx.sandboxPolicy.workspaceRoot, signal })
+    
+    // 预检：必须是目录
+    const info = await ctx.fs.lstat(dir, { cwd: ctx.sandboxPolicy.workspaceRoot, signal })
+    if (info?.type !== 'directory') {
+      // 不是目录的话跳过
+      continue
+    }
+    
+    const entries = await ctx.fs.list(dir, { cwd: ctx.sandboxPolicy.workspaceRoot, signal })
+    const dirName = dir.split('/').pop() || dir.split('\\').pop() || dir
+    results.push({
+      directory: dir,
+      displayName: dirName,
+      entries: entries.map(e => e.name),
+      count: entries.length,
+    })
+    totalEntries += entries.length
+  }
+
+  return { ok: true, directories: results, totalEntries }
 }
 
 /**

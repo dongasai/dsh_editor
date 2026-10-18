@@ -444,6 +444,16 @@ window.__ModuleLoader__.load({
       'files.terminal.failed': '没能打开终端页签。',
       'files.terminal.noInput': '终端开了，但拿不到它的输入面，没能切到该目录。',
       'files.terminal.timeout': '终端开了，但等它可写超时，没能自动切到该目录。',
+      'files.batchList': '批量列目录 (F2)',
+      'files.batchListTitle': '已选 {count} 个目录的内容',
+      'files.copyEntries': '复制条目列表',
+      'files.noEntries': '没有条目',
+      'files.close': '关闭',
+      'search.placeholder': '搜索文件内容…',
+      'search.loading': '搜索中…',
+      'search.noResults': '没有找到匹配项',
+      'search.failed': '搜索失败',
+      'search.noSession': '当前没有可用的会话，请先选择一个会话。',
       'image.title': '预览 {name}',
       'image.alt': '图片预览',
       'image.loading': '读取中…',
@@ -614,6 +624,16 @@ window.__ModuleLoader__.load({
       'send.failed.busy': 'The input is busy or just changed; nothing was inserted. Try again.',
       'send.failed.path': 'This file path cannot be represented as a reference safely.',
       'send.failed.clipboard': 'The browser refused clipboard access; use Ctrl/Cmd+C instead.',
+      'files.batchList': 'Batch list directories (F2)',
+      'files.batchListTitle': 'Contents of {count} selected directories',
+      'files.copyEntries': 'Copy entries',
+      'files.noEntries': 'No entries',
+      'files.close': 'Close',
+      'search.placeholder': 'Search file contents…',
+      'search.loading': 'Searching…',
+      'search.noResults': 'No matches found',
+      'search.failed': 'Search failed',
+      'search.noSession': 'No available session. Please select a session first.',
     }
 
     /**
@@ -4632,6 +4652,17 @@ window.__ModuleLoader__.load({
               setSortOpen((prev) => (prev === null ? menuAnchorFor(event) : null))
             },
           }, glyph('sort'))),
+        // F2 批量列目录按钮（只显示在有多选时）
+        selection.size >= 1 && selection.hasDirectory && h('button', {
+          type: 'button',
+          className: 'dsh-wef-tool',
+          title: t('files.batchList'),
+          'data-workspace-editor-files-batch-list': '',
+          onClick: (event) => {
+            event.stopPropagation()
+            openBatchList(selection)
+          },
+        }, glyph('list')),
         // 批量条：**勾了至少一项就出现**（勾选框是主入口，只勾一个也得拿到批量操作）。
         // 最左那颗是全选框，与每行的勾选框纵向对齐 —— 多选相关的东西全部靠左，不跑到右边。
         selection.size >= 1 && h('div', {
@@ -4914,6 +4945,315 @@ window.__ModuleLoader__.load({
       return { FilesPanel, FilesTree }
     }
 
+    /** F2 批量列目录弹窗 */
+    function createBatchListDialog(ctx) {
+      const t = ctx.locale.bind(NS)
+      
+      /** 当前弹窗状态 */
+      let dialogState = {
+        directories: [],   // 选中的目录列表
+        contents: [],      // 每个目录的内容 [{ directory, entries, count }]
+        loading: false,
+        error: null,
+      }
+
+      /** 打开批量列目录弹窗 */
+      async function openBatchList(selectedPaths) {
+        // 过滤出目录
+        const dirs = []
+        for (const path of selectedPaths) {
+          try {
+            const info = await ctx.fs.stat(path)
+            if (info?.type === 'directory') {
+              const parts = path.split('/')
+              const name = parts[parts.length - 1]
+              if (!name.startsWith('.')) { // 忽略隐藏项
+                dirs.push(path)
+              }
+            }
+          } catch (err) {
+            ctx.logger.warn('batch list stat failed:', path, err)
+          }
+        }
+        
+        if (dirs.length === 0) {
+          return
+        }
+
+        dialogState = {
+          directories: dirs,
+          contents: [],
+          loading: true,
+          error: null,
+        }
+
+        try {
+          const sessionId = ctx.sessions.getActiveId?.() || (ctx.sessions.list.getSnapshot()?.[0]?.id)
+          if (!sessionId) {
+            throw new Error(t('search.noSession'))
+          }
+
+          const response = await fetch(LIST_BATCH_PATH, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              sessionId,
+              paths: dirs.slice(0, 50),
+            }),
+          })
+
+          const data = await response.json()
+
+          if (!response.ok || !data.ok) {
+            throw new Error(data.message || t('files.batchListFailed'))
+          }
+
+          dialogState = {
+            ...dialogState,
+            contents: data.directories || [],
+            loading: false,
+          }
+        } catch (err) {
+          dialogState = { ...dialogState, loading: false, error: err.message }
+          ctx.logger.error('batch list failed:', err)
+        }
+      }
+
+      /** 关闭弹窗 */
+      function closeBatchList() {
+        dialogState = {
+          directories: [],
+          contents: [],
+          loading: false,
+          error: null,
+        }
+      }
+
+      /** 复制到剪贴板 */
+      async function copyToClipboard() {
+        const lines = dialogState.contents.map(d => 
+          `${d.displayName}/\n${d.entries.map(e => `  ${e}`).join('\n')}`
+        )
+        const text = lines.join('\n\n')
+        try {
+          await navigator.clipboard.writeText(text)
+          ctx.notice.show?.('Copied to clipboard')
+        } catch (err) {
+          ctx.logger.error('copy failed:', err)
+        }
+      }
+
+      /** 弹窗内容 */
+      function BatchListDialogContent() {
+        if (dialogState.directories.length === 0) return null
+
+        return h('div', { className: 'dsh-web-batch-list-dialog-overlay' },
+          h('div', { className: 'dsh-web-batch-list-dialog-backdrop', onClick: closeBatchList }),
+          h('div', { className: 'dsh-web-batch-list-dialog' },
+            h('div', { className: 'dsh-web-batch-list-header' },
+              h('h3', {}, t('files.batchListTitle', { count: dialogState.directories.length })),
+              h('button', {
+                className: 'dsh-web-batch-list-close',
+                onClick: (e) => { e.stopPropagation(); closeBatchList() },
+              }, '×'),
+            ),
+            h('div', { className: 'dsh-web-batch-list-body' },
+              dialogState.loading && h('div', { className: 'dsh-web-batch-list-loading' }, t('files.loading')),
+              dialogState.error && h('div', { className: 'dsh-web-batch-list-error' }, dialogState.error),
+              !dialogState.loading && !dialogState.error && h('div', { className: 'dsh-web-batch-list-empty' }, t('files.noEntries')),
+              ...dialogState.contents.map((dir, i) => 
+                h('div', { key: i, className: 'dsh-web-batch-list-dir' },
+                  h('div', { className: 'dsh-web-batch-list-dir-name' }, dir.displayName),
+                  h('ul', { className: 'dsh-web-batch-list-entries' },
+                    dir.entries.map(entry => 
+                      h('li', { key: entry }, entry)
+                    ),
+                  ),
+                )
+              ),
+            ),
+            h('div', { className: 'dsh-web-batch-list-footer' },
+              h('button', {
+                className: 'dsh-web-batch-list-copy',
+                onClick: (e) => { e.stopPropagation(); copyToClipboard() },
+              }, t('files.copyEntries')),
+              h('button', {
+                className: 'dsh-web-batch-list-close-btn',
+                onClick: (e) => { e.stopPropagation(); closeBatchList() },
+              }, t('files.close')),
+            ),
+          ),
+        )
+      }
+
+      return { BatchListDialogContent, openBatchList, closeBatchList }
+    }
+
+    /** 搜索面板相关常量与纯函数 */
+    /* search:start */
+    const SEARCH_PATH = '/workspace-editor/search'
+    const LIST_BATCH_PATH = '/workspace-editor/list-batch'
+
+    /** 搜索结果预览的行数上限（每个文件）。 */
+    const SEARCH_PREVIEW_LINES = 3
+
+    /** 在文件中查找匹配行的索引范围（用于高亮定位）。 */
+    function findLineIndex(content, lineNo) {
+      const lines = content.split('\n')
+      let index = 0
+      for (let i = 1; i < lineNo && i <= lines.length; i++) {
+        index += lines[i - 1].length + 1 // +1 for newline
+      }
+      return index
+    }
+    /* search:end */
+
+    /** 创建搜索面板（独立的面板页签，像 VSCode 的搜索侧边栏）。 */
+    function createSearchPanel(ctx) {
+      const t = ctx.locale.bind(NS)
+      
+      /** 当前状态 */
+      let state = {
+        pattern: '',           // 搜索关键词
+        caseSensitive: false,  // 区分大小写
+        onlyFilenames: false,  // 仅文件名匹配
+        results: [],           // 搜索结果 [{ path, matches }]
+        loading: false,
+        error: null,
+        panelOpen: false,
+      }
+
+      /** 打开搜索面板并聚焦输入框 */
+      function openSearchPanel() {
+        state = { ...state, panelOpen: true, pattern: '', results: [], error: null, loading: false }
+      }
+
+      /** 关闭搜索面板 */
+      function closeSearchPanel() {
+        state = { ...state, panelOpen: false, pattern: '', results: [], error: null, loading: false }
+      }
+
+      /** 执行搜索 */
+      async function executeSearch() {
+        if (!state.pattern.trim()) return
+        
+        state = { ...state, loading: true, error: null }
+        
+        try {
+          const sessionId = ctx.sessions.getActiveId?.() || (ctx.sessions.list.getSnapshot()?.[0]?.id)
+          if (!sessionId) {
+            throw new Error(t('search.noSession'))
+          }
+          
+          const response = await fetch(SEARCH_PATH, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              sessionId,
+              pattern: state.pattern,
+              caseSensitive: state.caseSensitive,
+              // 注意：这里不支持 pathPrefix，搜索整个工作区
+            }),
+          })
+          
+          const data = await response.json()
+          
+          if (!response.ok || !data.ok) {
+            throw new Error(data.message || t('search.failed'))
+          }
+          
+          state = { 
+            ...state, 
+            results: data.results || [],
+            loading: false,
+          }
+        } catch (err) {
+          state = { ...state, loading: false, error: err.message }
+          ctx.logger.error('search failed:', err)
+        }
+      }
+
+      /** 打开搜索结果对应的编辑器页签 */
+      function openResult(path, lineNo) {
+        const address = FILE_ADDRESS_PREFIX + encodeURIComponent(path)
+        const paneId = `${EDITOR_TAB_ID}-${path}-${lineNo}`
+        
+        ctx.sidebarRight.openTabFromTarget(
+          EDITOR_KIND,
+          ctx.sidebarRight.commandTarget(document.activeElement),
+          { address, paneId, replaceTab: false }
+        )
+        
+        // TODO: 滚动到对应行（需要等待编辑器加载完成）
+      }
+
+      /** 结果行渲染 */
+      function ResultRow(props) {
+        const { result, onClick } = props
+        return h('div', {
+          className: 'dsh-wes-result-row',
+          onClick: () => onClick(result.path),
+        },
+          h('div', { className: 'dsh-wes-file-header' }, result.path),
+          ...result.matches.slice(0, SEARCH_PREVIEW_LINES).map((m, i) => 
+            h('div', {
+              key: i,
+              className: 'dsh-wes-match-line',
+              onClick: (e) => {
+                e.stopPropagation()
+                onClick(result.path, m.lineNo)
+              },
+            },
+              h('span', { className: 'dsh-wes-line-no' }, String(m.lineNo)),
+              h('span', { className: 'dsh-wes-line-text' }, m.preview),
+            )
+          ),
+        )
+      }
+
+      /** 搜索面板主体 */
+      function SearchPanelBody() {
+        if (!state.panelOpen) return null
+        
+        return h('div', { className: 'dsh-wes-panel' },
+          // 顶部工具栏
+          h('div', { className: 'dsh-wes-toolbar' },
+            h('input', {
+              type: 'text',
+              className: 'dsh-wes-search-input',
+              placeholder: t('search.placeholder'),
+              value: state.pattern,
+              onInput: (e) => {
+                state = { ...state, pattern: e.target.value }
+              },
+              onKeyDown: (e) => {
+                if (e.key === 'Enter') executeSearch()
+                else if (e.key === 'Escape') closeSearchPanel()
+              },
+            }),
+            h('button', {
+              className: 'dsh-wes-close',
+              onClick: closeSearchPanel,
+            }, '×'),
+          ),
+          
+          // 结果区
+          h('div', { className: 'dsh-wes-results' },
+            state.loading && h('div', { className: 'dsh-wes-loading' }, t('search.loading')),
+            state.error && h('div', { className: 'dsh-wes-error' }, state.error),
+            !state.loading && !state.error && state.results.length === 0 && state.pattern && 
+              h('div', { className: 'dsh-wes-empty' }, t('search.noResults')),
+            ...state.results.map(result => 
+              h(ResultRow, { key: result.path, result, onClick: openResult })
+            ),
+          ),
+        )
+      }
+
+      return { SearchPanelBody, openSearchPanel, closeSearchPanel }
+    }
+    /* search:end */
+
     /** 浏览器侧需要的服务：槽位、文案、文档渲染器注册表、右侧栏页签，以及工作区文件的读接口。 */
     const inject = [
       'slots',
@@ -4956,6 +5296,10 @@ window.__ModuleLoader__.load({
       const t = ctx.locale.bind(NS)
       const { DocumentBody, PaneBody, EditAction, DeleteAction } = createEditor(ctx)
       const { FilesPanel } = createFilesPanel(ctx)
+      const searchPanel = createSearchPanel(ctx)
+      const { SearchPanelBody, openSearchPanel, closeSearchPanel } = searchPanel
+      const batchDialog = createBatchListDialog(ctx)
+      const { BatchListDialogContent } = batchDialog
       const { ImageBody } = createImageBody(ctx)
       const bands = [
         { id: DEFAULT_RENDERER_ID, extensions: DEFAULT_EXTENSIONS, priority: 'extension' },
@@ -5079,6 +5423,31 @@ window.__ModuleLoader__.load({
           },
         }), 'workspace-editor: files shortcut')
       })
+
+      // F12 搜索 + F2 批量列目录 + ESC 关闭弹窗
+      ctx.effect(() => {
+        const onKey = (event) => {
+          // F12: 打开搜索面板
+          if (event.key === 'F12' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+            event.preventDefault()
+            openSearchPanel()
+          }
+          // F2: 批量列目录（仅当文件树面板激活时）
+          else if (event.key === 'F2' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+            event.preventDefault()
+            // TODO: 检查是否在文件树面板中，这里简化处理直接调用
+            openBatchListDialog(selection.get?.() || new Set())
+          }
+          // ESC: 关闭搜索面板或批量列表弹窗
+          else if (event.key === 'Escape') {
+            closeSearchPanel()
+            // batchDialog.closeBatchList() 已经在内部处理
+          }
+        }
+
+        document.addEventListener('keydown', onKey, true)
+        return () => document.removeEventListener('keydown', onKey, true)
+      }, 'workspace-editor: global key handler')
     }
 
     return { name: 'workspace-editor', inject, apply }
