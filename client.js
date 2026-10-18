@@ -100,6 +100,20 @@
  */
 
 /**
+ * 整个 bundle 包在这层 IIFE 里 —— **这不是风格选择，是必需的**。
+ *
+ * 宿主 `@deepseek-ai/dsh-client-modules` 的 `buildComboScript` 把 profile 里所有 client bundle
+ * 的源码**直接拼成一个 classic script**（`source += resource.source + ';\n'`），**不按包加作用域
+ * 隔离**。于是所有插件的顶层词法声明共享同一个全局作用域：两个插件各写一个同名顶层
+ * `const PACKAGE_NAME`，整条 combo 就抛 `SyntaxError: Identifier 'PACKAGE_NAME' has already been
+ * declared` —— **一个 bundle 都不注册**，页面表现为「loaded without registering … via
+ * __ModuleLoader__.load」，而这条报错完全看不出是跟别的插件撞了名（真踩过：与
+ * `@dongasai/dsh-sidebar-terminal` 的顶层 `const PACKAGE_NAME` 相撞）。
+ *
+ * 所以本文件的顶层**只允许**注释与这一个 IIFE；要加顶层常量，请加在 IIFE 内部。
+ */
+;(() => {
+/**
  * 插件包名。两个用处：`__ModuleLoader__.load` 的 id，以及「文件编辑」面板页脚的归属信息
  * （页脚要按它去 Host 的插件清单里认领自己的版本号）—— 只此一份字面量。
  */
@@ -214,6 +228,7 @@ window.__ModuleLoader__.load({
 .dsh-we-bar{display:flex;align-items:center;gap:8px;flex:none;padding:6px 10px;border-bottom:.5px solid var(--dsw-alias-border-l1);font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dsh-we-spacer{flex:1 1 auto}
 .dsh-we-hint{white-space:nowrap}
+.dsh-we-status-path{max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary)}
 .dsh-we-status[data-tone="saved"]{color:var(--dsw-alias-state-success-primary)}
 .dsh-we-status[data-tone="dirty"]{color:var(--dsw-alias-state-warn-primary)}
 .dsh-we-status[data-tone="error"]{color:var(--dsw-alias-state-error-primary)}
@@ -272,9 +287,22 @@ window.__ModuleLoader__.load({
 .dsh-wef-body[data-drop="true"]{background:var(--dsw-alias-bg-layer-2)}
 .dsh-wef-row{display:flex;align-items:center;gap:4px;width:100%;box-sizing:border-box;padding:4px 6px 4px 2px;border:none;background:transparent;color:inherit;font:inherit;text-align:left;border-radius:var(--dsw-radius-sm,6px);cursor:pointer}
 .dsh-wef-row:hover{background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}
-.dsh-wef-row[data-selected="true"]{background:var(--dsw-alias-interactive-bg-selected,var(--dsw-alias-bg-layer-2))}
+.dsh-wef-row[data-selected="true"]{background:var(--dsw-alias-interactive-bg-selected,var(--dsw-alias-bg-layer-2));box-shadow:inset 2px 0 0 var(--dsw-alias-brand-primary,#4d6bfe)}
+/* 行左侧常显的多选框 = 多选的主入口。选中态刻意做**三重独立信号**（勾选框填充 / 行背景 /
+   左侧色条），且勾选框与色条都带硬编码兜底色：皮肤可以改 --dsw-alias-* 这套变量，但改不出「看不见」
+   （真踩过：orca-link 皮肤下 --dsw-alias-interactive-bg-selected 与常态无差别，多选完全无反馈）。 */
+.dsh-wef-check{width:16px;height:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:0;margin-right:2px;border:.5px solid var(--dsw-alias-border-l2);border-radius:3px;background:var(--dsw-alias-bg-base);color:transparent;font-size:11px;line-height:14px;cursor:pointer}
+.dsh-wef-check:hover{border-color:var(--dsw-alias-brand-primary,#4d6bfe)}
+.dsh-wef-check[data-checked="true"]{background:var(--dsw-alias-brand-primary,#4d6bfe);border-color:var(--dsw-alias-brand-primary,#4d6bfe);color:var(--dsw-alias-bg-base,#fff)}
+/* 表头那颗全选框的「半选」态：勾了但不全 —— 用一条横线，不是实心块。 */
+.dsh-wef-check[data-checked="partial"]{border-color:var(--dsw-alias-brand-primary,#4d6bfe);color:var(--dsw-alias-brand-primary,#4d6bfe);background:var(--dsw-alias-bg-base)}
+/* 光标行（F2 / 工具条「重命名选中行」的作用对象）单独给一条虚线勾边：它和「勾上了」是两件事，
+   不能共用同一个视觉，否则看不出 F2 会改哪一行。 */
+.dsh-wef-row[data-anchor="true"]:not([data-drop="true"]){outline:1px dashed var(--dsw-alias-border-l2);outline-offset:-1px}
+.dsh-wef-check-gap{width:18px;flex:none}
 .dsh-wef-row[data-drop="true"]{outline:1px dashed var(--dsw-alias-brand-primary);outline-offset:-1px}
 .dsh-wef-row[data-busy="true"]{opacity:.5}
+.dsh-wef-row[data-hidden="true"] .dsh-wef-name,.dsh-wef-row[data-hidden="true"] .dsh-wef-glyph{opacity:.55}
 .dsh-wef-caret{width:16px;height:16px;flex:none;display:inline-flex;align-items:center;justify-content:center;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer}
 .dsh-wef-spacer{width:16px;flex:none}
 .dsh-wef-glyph{flex:none;display:inline-flex;color:var(--dsw-alias-label-tertiary)}
@@ -290,6 +318,10 @@ window.__ModuleLoader__.load({
 .dsh-wef-menu-item:hover{background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}
 .dsh-wef-menu-item[data-danger="true"]{color:var(--dsw-alias-state-error-primary)}
 .dsh-wef-menu-sep{height:1px;margin:3px 4px;background:var(--dsw-alias-border-l1)}
+.dsh-wef-menu-check{flex:none;width:12px;color:var(--dsw-alias-brand-primary)}
+.dsh-wef-batch{flex:none;display:flex;align-items:center;gap:6px;padding:5px 10px;border-bottom:.5px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-base));font-size:12px}
+.dsh-wef-batch-text{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary)}
+.dsh-wef-batch-fill{flex:1 1 auto}
 .dsh-wef-note{margin:0;padding:3px 10px;color:var(--dsw-alias-label-tertiary);font-size:12px}
 .dsh-wef-input{width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:2px 6px;border-radius:var(--dsw-radius-sm,6px);border:.5px solid var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);outline:none}
 .dsh-wef-status{flex:none;padding:6px 10px;border-top:.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:12px}
@@ -351,6 +383,22 @@ window.__ModuleLoader__.load({
       'files.clipboardMode.cut': '剪切',
       'files.delete': '删除',
       'files.refresh': '刷新',
+      'files.sort': '排序',
+      'files.sort.name': '按名称',
+      'files.sort.type': '按类型',
+      'files.sort.dirsFirst': '目录优先',
+      'files.batch.count': '已选 {count} 项',
+      'files.check': '勾选这一行（用于批量操作）',
+      'files.batch.copyPaths': '复制路径',
+      'files.batch.selectAll': '全选',
+      'files.batch.delete': '删除',
+      'files.batch.clear': '清空',
+      'files.batch.copied': '已复制 {count} 条路径',
+      'files.batch.done': '已删除 {count} 项',
+      'files.batch.failed': '{failed} 项没删成（其中 {conflicted} 项在确认期间变过），它们还留在选择里，可以重试。',
+      'files.batch.retry': '重试删除',
+      'files.confirmDeleteMany': '删除选中的 {count} 项？删除后无法恢复',
+      'files.confirmDeleteManyDirs': '删除选中的 {count} 项（其中 {dirs} 个目录会连内容一起删）？删除后无法恢复',
       'files.open': '用编辑器打开',
       'files.more': '更多操作（重命名 / 复制 / 剪切 / 粘贴 / 删除）',
       'files.root': '工作区',
@@ -477,6 +525,22 @@ window.__ModuleLoader__.load({
       'files.clipboardMode.cut': 'cut',
       'files.delete': 'Delete',
       'files.refresh': 'Refresh',
+      'files.sort': 'Sort',
+      'files.sort.name': 'By name',
+      'files.sort.type': 'By type',
+      'files.sort.dirsFirst': 'Folders first',
+      'files.batch.count': '{count} selected',
+      'files.check': 'Select this row (for batch actions)',
+      'files.batch.copyPaths': 'Copy paths',
+      'files.batch.selectAll': 'Select all',
+      'files.batch.delete': 'Delete',
+      'files.batch.clear': 'Clear',
+      'files.batch.copied': 'Copied {count} paths',
+      'files.batch.done': 'Deleted {count} entries',
+      'files.batch.failed': '{failed} entries were not deleted ({conflicted} of them changed on disk). They stay selected, so you can retry.',
+      'files.batch.retry': 'Retry delete',
+      'files.confirmDeleteMany': 'Delete the {count} selected entries? This cannot be undone',
+      'files.confirmDeleteManyDirs': 'Delete the {count} selected entries ({dirs} folders go with their contents)? This cannot be undone',
       'files.open': 'Open in the editor',
       'files.more': 'More actions (rename / copy / cut / paste / delete)',
       'files.root': 'Workspace',
@@ -683,6 +747,32 @@ window.__ModuleLoader__.load({
       if (path.startsWith(`${root}/`) || path.startsWith(`${root}\\`)) return path.slice(root.length + 1)
       return path
     }
+
+    /* path-tools:start */
+
+    /**
+     * 状态条上的路径缩写：太长时从**头部**截断，保住最后一段文件名。
+     *
+     * 为什么不能只交给 CSS：`text-overflow: ellipsis` 只会截**尾**，而这条 bar 里最有信息量的
+     * 就是文件名 —— 截成 `…/dsh_edito` 等于没显示。头部截断保住 `README.md`，完整绝对路径仍在
+     * `title` 与 `data-workspace-editor-status-path` 上（锚点值**永远是绝对路径**，与显示出的
+     * 相对路径分开，这样断言不必关心栏宽）。
+     *
+     * **必须待在工厂作用域**（与 `relativizeToCwd` 并排，两者口径绑定）：它同时被
+     * `EditorSurface` 与 `ImageBody` 用；挪进 `createFilesPanel` 就会让那两面渲染时
+     * `ReferenceError` 白屏 —— 而只挂面板的探针抓不到这种跨作用域引用。
+     * @param text - 要显示的路径。
+     * @param max - 最多保留多少个字符（含省略号）；非正数用 48。
+     * @returns 不超长原样返回；超长时返回省略号 + 尾部。
+     */
+    function shortenPath(text, max) {
+      const value = String(text ?? '')
+      const limit = typeof max === 'number' && max > 1 ? Math.floor(max) : 48
+      if (value.length <= limit) return value
+      return `…${value.slice(-(limit - 1))}`
+    }
+
+    /* path-tools:end */
 
     /**
      * 文本里某个偏移所在的行号（1 起）。
@@ -954,6 +1044,7 @@ window.__ModuleLoader__.load({
       refresh: ['M13 8a5 5 0 1 1-1.7-3.7', 'M13.3 2.6v3.2h-3.2'],
       open: ['M2.5 12.5V6h6.5l-2.4 2.4', 'M6.6 3.5h6v6'],
       more: ['M3.6 8h.01', 'M8 8h.01', 'M12.4 8h.01'],
+      sort: ['M4.4 3.2v9.6', 'M2.4 5.2 4.4 3.2 6.4 5.2', 'M11.6 12.8V3.2', 'M9.6 10.8l2 2 2-2'],
       send: ['M2.2 8h9.4', 'M8.4 4.4 11.8 8l-3.4 3.6'],
     }
 
@@ -2160,6 +2251,14 @@ window.__ModuleLoader__.load({
             'data-tone': statusTone,
             'data-workspace-editor-status': statusTone,
           }, statusText),
+          // 路径：与右键「复制相对路径」**同一份口径**（`relativizeToCwd` + `sessionCwd`），
+          // 所以工作区外的文件自动回退成绝对路径、拿不到 cwd 时原样显示。
+          // 显示宽度不够时从头部截断（保住文件名），完整绝对路径在 `title` 与锚点属性上。
+          h('span', {
+            className: 'dsh-we-status-path',
+            title: doc.absolutePath ?? path,
+            'data-workspace-editor-status-path': doc.absolutePath ?? path,
+          }, shortenPath(relativizeToCwd(doc.absolutePath ?? path, sessionCwd(ctx, sessionId)))),
           h('span', { className: 'dsh-we-spacer' }),
           h('span', { className: 'dsh-we-hint', 'data-workspace-editor-hint': '' }, t('hint.save')),
           onToggleWrap !== undefined && h('button', {
@@ -3022,6 +3121,13 @@ window.__ModuleLoader__.load({
         h('style', null, CSS),
         h('div', { className: 'dsh-we-bar' },
           h('span', { className: 'dsh-we-status', 'data-workspace-editor-image-meta': '' }, meta ?? t('image.loading')),
+          // 与编辑器状态条同一份口径、同一个锚点（约束 16：跨面同理）；cwd 用 `owner` ——
+          // 与这面那三个菜单动作一致，跨会话查看时相对路径才不会被算错。
+          h('span', {
+            className: 'dsh-we-status-path',
+            title: path,
+            'data-workspace-editor-status-path': path,
+          }, shortenPath(relativizeToCwd(path, sessionCwd(ctx, owner)))),
           h('span', { className: 'dsh-we-spacer' }),
           state.phase === 'ready' && h('button', {
             type: 'button',
@@ -3160,13 +3266,163 @@ window.__ModuleLoader__.load({
         return `${name.slice(0, dot)} 副本${name.slice(dot)}`
       }
 
-      /** 目录在前、同类型按名字排；后端给的是稳定名序，这里只调整展示顺序。 */
-      function sortEntries(entries) {
+      /* tree:start */
+
+      /** 排序键：按名字（默认）或按扩展名分组。 */
+      const TREE_SORT_KEYS = ['name', 'type']
+
+      /** 默认排序：目录优先 + 按名字 —— 与后端给的顺序一致，所以默认状态看不出任何变化。 */
+      const DEFAULT_TREE_SORT = { key: 'name', dirsFirst: true }
+
+      /** 目录链最多折多少层：挡住「一路单子目录」的病态深树把渲染拖住。 */
+      const TREE_CHAIN_MAX = 32
+
+      /** 一次挂载最多为折叠探测预读多少个目录（每个路径只试一次，所以这就是请求数上限）。 */
+      const TREE_PRELOAD_BUDGET = 64
+
+      /** 扩展名（最后一个点之后，小写）；没有扩展名、或点开头（`.env`）返回空串。 */
+      function extensionOf(name) {
+        const dot = name.lastIndexOf('.')
+        return dot <= 0 ? '' : name.slice(dot + 1).toLowerCase()
+      }
+
+      /** 隐藏条目：名字以点开头。折叠时**不计入**「唯一子项」判定，与 VSCode 一致。 */
+      function isHiddenName(name) {
+        return name.startsWith('.')
+      }
+
+      /**
+       * 名字比较：先大小写不敏感，再用原始码点决胜。
+       *
+       * 为什么不用 `localeCompare`：它依赖运行时 locale，同一个目录在两台机器上可能给出不同顺序，
+       * 而这棵树的行顺序会被键盘 Shift 范围选择当成坐标用 —— 顺序必须可复现。
+       * @param left - 左名字。
+       * @param right - 右名字。
+       * @returns 负数 / 0 / 正数。
+       */
+      function compareTreeNames(left, right) {
+        const a = left.toLowerCase()
+        const b = right.toLowerCase()
+        if (a !== b) return a < b ? -1 : 1
+        if (left === right) return 0
+        return left < right ? -1 : 1
+      }
+
+      /**
+       * 排一个目录的条目。默认（`name` + 目录优先）与后端顺序逐项一致。
+       * @param entries - `workspaceFiles.list` 给的条目。
+       * @param sort - `{ key, dirsFirst }`；省略用默认。
+       * @returns 新数组（不改入参）。
+       */
+      function sortEntries(entries, sort) {
+        const spec = sort === undefined ? DEFAULT_TREE_SORT : sort
+        const dirsFirst = spec.dirsFirst !== false
         return [...entries].sort((left, right) => {
-          const rank = (entry) => (entry.type === 'directory' ? 0 : 1)
-          return rank(left) - rank(right) || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+          if (dirsFirst) {
+            const diff = (left.type === 'directory' ? 0 : 1) - (right.type === 'directory' ? 0 : 1)
+            if (diff !== 0) return diff
+          }
+          if (spec.key === 'type') {
+            const diff = compareTreeNames(extensionOf(left.name), extensionOf(right.name))
+            if (diff !== 0) return diff
+          }
+          return compareTreeNames(left.name, right.name)
         })
       }
+
+      /**
+       * 把「一路只有一个真子目录」的链折成一行（VSCode 的 compact folders）。
+       *
+       * 只折**已经加载过**的层级：没读过的目录不知道它有几个子项，猜着折会把两条不同的链显示成
+       * 一行。`chainCandidates` 负责把候选目录预读进来，读到了下一轮渲染才会折。
+       * @param dir - 正在渲染的目录。
+       * @param entries - 这个目录的条目（已排序）。
+       * @param lookup - `(path) => entries | undefined`，取一个已加载目录的条目。
+       * @returns 每项 `{ path, entry, chain }`；`path` 是**链尾**（折叠行代表它），`chain` 至少一项。
+       */
+      function foldLevel(dir, entries, lookup) {
+        const rows = []
+        for (const entry of entries) {
+          const head = `${dir}/${entry.name}`
+          const chain = [head]
+          if (entry.type === 'directory') {
+            let current = head
+            while (chain.length < TREE_CHAIN_MAX) {
+              const children = lookup(current)
+              if (children === undefined) break
+              const real = children.filter((child) => !isHiddenName(child.name))
+              if (real.length !== 1 || real[0].type !== 'directory') break
+              current = `${current}/${real[0].name}`
+              chain.push(current)
+            }
+          }
+          rows.push({ path: chain[chain.length - 1], entry, chain })
+        }
+        return rows
+      }
+
+      /**
+       * 还要预读哪些目录才能把链折出来：只挑「当前唯一真子目录」那一条，逐层往下。
+       * @param dir - 正在渲染的目录。
+       * @param entries - 这个目录的条目。
+       * @param lookup - 取已加载目录的条目。
+       * @returns 需要读的目录路径（按链顺序、已去重）。
+       */
+      function chainCandidates(dir, entries, lookup) {
+        const wanted = []
+        for (const entry of entries) {
+          if (entry.type !== 'directory') continue
+          let current = `${dir}/${entry.name}`
+          while (wanted.length < TREE_CHAIN_MAX) {
+            const children = lookup(current)
+            if (children !== undefined) {
+              const real = children.filter((child) => !isHiddenName(child.name))
+              if (real.length !== 1 || real[0].type !== 'directory') break
+              current = `${current}/${real[0].name}`
+              continue
+            }
+            if (!wanted.includes(current)) wanted.push(current)
+            break
+          }
+        }
+        return wanted
+      }
+
+      /**
+       * Shift 范围选择：在**可见行的顺序**上从锚点到目标取一段。
+       * @param paths - 可见行的路径，按渲染顺序。
+       * @param anchor - 锚点路径。
+       * @param target - 目标路径。
+       * @returns 选中的路径集合；锚点不在可见行里时只选目标。
+       */
+      function rangeSelection(paths, anchor, target) {
+        const from = paths.indexOf(anchor)
+        const to = paths.indexOf(target)
+        if (from === -1 || to === -1) return new Set([target])
+        return new Set(paths.slice(Math.min(from, to), Math.max(from, to) + 1))
+      }
+
+      /**
+       * 批量删除前把选择集收一遍：被选中的目录已经会连内容一起删，它下面那些**也被选中**的路径
+       * 必须去掉，否则第二次请求会撞「路径已经不在了」。工作区根自己也不删。
+       * @param selected - 选中的路径。
+       * @param root - 工作区根。
+       * @returns 要删的路径，浅的在前（父目录先删，子项随后自然消失）。
+       */
+      function pruneForBatchDelete(selected, root) {
+        const depthOf = (path) => path.split('/').length
+        const kept = []
+        const ordered = [...selected].sort((left, right) => depthOf(left) - depthOf(right) || compareTreeNames(left, right))
+        for (const path of ordered) {
+          if (path === root) continue
+          const covered = kept.some((outer) => path === outer || path.startsWith(`${outer}/`))
+          if (covered) continue
+          kept.push(path)
+        }
+        return kept
+      }
+
+      /* tree:end */
 
       /**
        * 一次操作的失败说明：能对号入座的就给本地化的人话，其余回落到 Host 的原始诊断。
@@ -3248,6 +3504,22 @@ window.__ModuleLoader__.load({
         const [levels, setLevels] = React.useState({})
         const [expanded, setExpanded] = React.useState(() => new Set([root]))
         const [selected, setSelected] = React.useState(root)
+        /**
+         * 多选集合：批量条与批量删除都读它。`selected` 只是「光标 / 锚点」（工具条、F2、Shift 范围
+         * 都从它出发），两个字段刻意不合并 —— 光标可以在没有选区的情况下单独存在。
+         */
+        const [selection, setSelection] = React.useState(() => new Set())
+        /** 排序规格。只影响渲染顺序，不重新读盘（数据里存的是原始顺序）。 */
+        const [sort, setSort] = React.useState(DEFAULT_TREE_SORT)
+        /** 排序菜单的开合：`{ x, y }`（视口坐标，与右键菜单同一套定位）或 null。 */
+        const [sortOpen, setSortOpen] = React.useState(null)
+        /** 批量删除的待确认状态：`{ items }`。与单条删除的 `pending` 分开，两者不会同时在屏。 */
+        const [batch, setBatch] = React.useState(null)
+        /**
+         * 批量删除**部分失败**的收场状态：`{ failed, conflicted }`。失败项留在选择集里，这条横幅
+         * 带一个「重试删除」—— 重试会重新取版本基线，所以磁盘变过的那几条也能接着处理。
+         */
+        const [batchFailed, setBatchFailed] = React.useState(null)
         const [editor, setEditor] = React.useState(null)
         const [pending, setPending] = React.useState(null)
         const [busy, setBusy] = React.useState(null)
@@ -3266,6 +3538,10 @@ window.__ModuleLoader__.load({
         levelsRef.current = levels
         const pendingRef = React.useRef(pending)
         pendingRef.current = pending
+        const batchRef = React.useRef(batch)
+        batchRef.current = batch
+        /** 已经为「折叠探测」预读过、或有在飞请求的目录：每个路径只试一次，失败也不重试。 */
+        const preloaded = React.useRef(new Set())
         const controllerRef = React.useRef(null)
         if (controllerRef.current === null) controllerRef.current = new AbortController()
         /** 每个目录的最新一次读盘代次：晚到的旧结果不许覆盖新结果。 */
@@ -3306,7 +3582,8 @@ window.__ModuleLoader__.load({
             setLevels((prev) => ({ ...prev, [path]: { phase: 'failed', message: result.error.message } }))
             return
           }
-          setLevels((prev) => ({ ...prev, [path]: { phase: 'ready', entries: sortEntries(result.value.entries), truncated: result.value.truncated } }))
+          // 存**原始顺序**，排序放到渲染时做：换排序键要立刻重排，不能为它再读一次盘。
+          setLevels((prev) => ({ ...prev, [path]: { phase: 'ready', entries: result.value.entries, truncated: result.value.truncated } }))
         }
         reloadRef.current = reloadDir
 
@@ -3357,6 +3634,47 @@ window.__ModuleLoader__.load({
 
         // 挂载就把工作区根列出来，并盯上它（root 由外层的 key 固定，换会话会整棵树重挂）。
         React.useEffect(() => { ensureDir(root) }, [root])
+
+        /**
+         * 预读一个目录，只为「折叠探测」：**不订阅**（订阅只给展开着的目录，见 `watchDir`）。
+         * 每个路径只试一次（`preloaded` 记账），失败也不重试 —— 折叠是锦上添花，不该为它反复打请求。
+         * @param path - 目录的绝对路径。
+         * @returns 读盘结束即返回。
+         */
+        const preloadDir = async (path) => {
+          if (levelsRef.current[path] !== undefined) return
+          await reloadDir(path)
+        }
+
+        /**
+         * 把「一路单子目录」的链预读出来：折叠要知道下一层有几个子项，而没读过的目录无从判断。
+         *
+         * 只沿**当前唯一真子目录**那一条链逐层往下（`chainCandidates`），所以常见的树里一个请求都
+         * 不会发；`preloaded` 记账保证收敛，`TREE_PRELOAD_BUDGET` 兜住病态深树。预读过的目录不进
+         * `expanded`、也不订阅变更 —— 它只影响折叠标签，真要看内容还是得展开（展开时才订阅）。
+         */
+        React.useEffect(() => {
+          const lookup = (path) => levelsRef.current[path]?.entries
+          const wanted = []
+          const visit = (dir) => {
+            const level = levelsRef.current[dir]
+            if (level === undefined || level.phase !== 'ready') return
+            for (const path of chainCandidates(dir, level.entries, lookup)) {
+              if (!wanted.includes(path)) wanted.push(path)
+            }
+            for (const entry of level.entries) {
+              const child = `${dir}/${entry.name}`
+              if (entry.type === 'directory' && expanded.has(child)) visit(child)
+            }
+          }
+          visit(root)
+          for (const path of wanted) {
+            if (preloaded.current.size >= TREE_PRELOAD_BUDGET) break
+            if (preloaded.current.has(path)) continue
+            preloaded.current.add(path)
+            void preloadDir(path)
+          }
+        }, [levels, expanded, root])
 
         /**
          * 发一条变更请求。
@@ -3426,13 +3744,71 @@ window.__ModuleLoader__.load({
           })
         }
 
-        /** 点一行：目录展开 / 收起，文件直接进编辑器。顺手把焦点收回树正文，键盘粘贴才有落点。 */
-        const activate = (path, type) => {
+        /** 把「光标」与选择集一起挪到一个路径上：所有变更动作收尾都走它，免得两个字段漂移。 */
+        /**
+         * 把「光标」挪到一个路径上，并**清空勾选集**。
+         *
+         * 变更动作（新建 / 改名 / 复制 / 移动 / 删除）收尾都走它：勾选是用户对**具体路径**的显式
+         * 意图，而这些路径刚被动过（旧名字甚至已经不存在），留着只会让批量操作打在空气上。
+         * @param path - 新的光标路径。
+         * @returns 无。
+         */
+        const focusPath = (path) => {
           setSelected(path)
+          setSelection(new Set())
+        }
+
+        /**
+         * 切换一行的勾选 —— 行首复选框与 Ctrl/Cmd+点 **共用这一份**实现（约束 16）。
+         * @param path - 这一行的路径。
+         * @returns 无。
+         */
+        const toggleSelection = (path) => {
           setError(null)
           setPending(null)
+          setBatch(null)
+          setBatchFailed(null)
           setMenu(null)
+          setSortOpen(null)
           bodyRef.current?.focus({ preventScroll: true })
+          setSelected(path)
+          setSelection((prev) => {
+            const next = new Set(prev)
+            if (next.has(path)) next.delete(path)
+            else next.add(path)
+            return next
+          })
+        }
+
+        /**
+         * 点一行。**不带修饰键 = 老语义**（目录展开 / 收起，文件直接进编辑器）；Ctrl/Cmd 点是切换
+         * 勾选、Shift 点是按可见行顺序取一段 —— 这两种都**不打开文件**。勾选集只由复选框与
+         * Ctrl / Shift / Ctrl+A 决定：普通单击只挪光标并清空勾选（与 VS Code 一致），
+         * 这样「勾了 1 个」也能立刻拿到批量操作。
+         * @param path - 这一行的路径。
+         * @param type - `file` | `directory`。
+         * @param event - 点击事件（读修饰键）；缺省按老语义走。
+         * @returns 无。
+         */
+        const activate = (path, type, event) => {
+          setError(null)
+          setPending(null)
+          setBatch(null)
+          setBatchFailed(null)
+          setMenu(null)
+          setSortOpen(null)
+          bodyRef.current?.focus({ preventScroll: true })
+          if (event !== undefined && (event.ctrlKey || event.metaKey)) {
+            toggleSelection(path)
+            return
+          }
+          if (event !== undefined && event.shiftKey) {
+            setSelection(rangeSelection(visiblePaths, selected, path))
+            setSelected(path)
+            return
+          }
+          // 普通单击：只挪光标、清空勾选（勾选是显式意图，不由单击产生）。
+          focusPath(path)
           if (type === 'directory') toggle(path)
           else openFile(path)
         }
@@ -3449,6 +3825,9 @@ window.__ModuleLoader__.load({
           event.preventDefault()
           event.stopPropagation()
           setSelected(path)
+          setSortOpen(null)
+          // 右键**不碰勾选集**：菜单里的动作都直接作用于被右键的那一行（`menu.path`），
+          // 而勾选是用户对「批量作用域」的显式意图 —— 看一眼菜单不该把它清掉。
           setError(null)
           setMenu({ path, type, ...menuAnchorFor(event) })
         }
@@ -3456,9 +3835,10 @@ window.__ModuleLoader__.load({
         /** 打开「新建」输入行：目录要顺手展开，否则输入框没地方待。 */
         const startCreate = (dir, mode) => {
           setPending(null)
-          setPending(null)
+          setBatch(null)
+          setBatchFailed(null)
           setError(null)
-          setSelected(dir)
+          focusPath(dir)
           ensureDir(dir)
           setExpanded((prev) => new Set(prev).add(dir))
           setEditor({ mode, dir })
@@ -3467,7 +3847,8 @@ window.__ModuleLoader__.load({
         /** 打开「重命名」输入行：预填当前名字，允许带 `/` 直接搬到子目录。 */
         const startRename = (path) => {
           setPending(null)
-          setPending(null)
+          setBatch(null)
+          setBatchFailed(null)
           setError(null)
           setEditor({ mode: 'rename', dir: parentOf(path), path })
         }
@@ -3503,7 +3884,7 @@ window.__ModuleLoader__.load({
               setError(describeMutationFailure(outcome, t))
               return
             }
-            setSelected(target)
+            focusPath(target)
             await reloadDir(draft.dir)
             if (parentOf(target) !== draft.dir) await reloadDir(parentOf(target))
             return
@@ -3516,7 +3897,7 @@ window.__ModuleLoader__.load({
             setError(describeMutationFailure(outcome, t))
             return
           }
-          setSelected(target)
+          focusPath(target)
           await reloadDir(draft.dir)
           if (draft.mode === 'file') openFile(target)
         }
@@ -3553,7 +3934,7 @@ window.__ModuleLoader__.load({
             setError(describeMutationFailure(outcome, t))
             return
           }
-          setSelected(target)
+          focusPath(target)
           await reloadDir(dir)
         }
 
@@ -3645,7 +4026,7 @@ window.__ModuleLoader__.load({
             const moved = `${dir}/${clip.name}`
             if (moved === clip.path) {
               // 贴回原地：什么都不用做，剪贴板继续留着。
-              setSelected(moved)
+              focusPath(moved)
               return
             }
             const outcome = await postJson(RENAME_URL, { from: clip.path, to: moved }, clip.path)
@@ -3655,7 +4036,7 @@ window.__ModuleLoader__.load({
               return
             }
             armClipboard(null)
-            setSelected(moved)
+            focusPath(moved)
             await reloadDir(parentOf(clip.path))
             if (dir !== parentOf(clip.path)) await reloadDir(dir)
             return
@@ -3667,7 +4048,7 @@ window.__ModuleLoader__.load({
             setError(describeMutationFailure(outcome, t))
             return
           }
-          setSelected(target)
+          focusPath(target)
           await reloadDir(dir)
         }
 
@@ -3707,7 +4088,7 @@ window.__ModuleLoader__.load({
             }
             last = target
           }
-          if (last !== null) setSelected(last)
+          if (last !== null) focusPath(last)
           await reloadDir(dir)
           if (failure !== null) setError(failure)
         }
@@ -3764,7 +4145,7 @@ window.__ModuleLoader__.load({
             setError(describeMutationFailure(outcome, t))
             return
           }
-          setSelected(to)
+          focusPath(to)
           await reloadDir(parentOf(from))
           if (parentOf(to) !== parentOf(from)) await reloadDir(parentOf(to))
         }
@@ -3773,6 +4154,9 @@ window.__ModuleLoader__.load({
         const armDelete = async (path, type) => {
           setError(null)
           setEditor(null)
+          // 单条删除与批量删除共用同一条确认位，两者不许同时在屏。
+          setBatch(null)
+          setBatchFailed(null)
           setBusy(path)
           const signal = controllerRef.current.signal
           let version
@@ -3826,8 +4210,91 @@ window.__ModuleLoader__.load({
             return
           }
           setPending(null)
-          setSelected(parentOf(target.path))
+          focusPath(parentOf(target.path))
           await reloadDir(parentOf(target.path))
+        }
+
+        /**
+         * 点批量条上的「删除」：先把选择集收一遍（`pruneForBatchDelete`），再逐条取版本闸基线，
+         * 最后亮**一次**确认条。
+         *
+         * 为什么逐条取基线：版本闸是每条路径各自的令牌，删之前必须知道「我看到的这一份」。逐条串行
+         * 而不是并发，是为了让「正在处理哪一条」看得见，也方便中途卸载时立刻停下。
+         * @returns 请求结束即返回。
+         */
+        const armBatchDelete = async () => {
+          const targets = pruneForBatchDelete(selection, root)
+          if (targets.length === 0) return
+          setError(null)
+          setEditor(null)
+          setPending(null)
+          setMenu(null)
+          setBatchFailed(null)
+          const signal = controllerRef.current.signal
+          const items = []
+          for (const path of targets) {
+            const type = isDirPath(path) ? 'directory' : 'file'
+            setBusy(path)
+            let version
+            try {
+              const stat = await ctx.remote.workspaceFiles.stat(sessionId, path, signal)
+              if (stat.ok) version = stat.value.version
+            } catch {
+              version = undefined
+            }
+            if (!aliveRef.current) return
+            items.push({ path, type, version })
+          }
+          setBusy(null)
+          setBatch({ items })
+        }
+
+        /**
+         * 执行批量删除：**逐条串行**（一条失败不影响其余），每条都带自己的版本闸。
+         *
+         * 目录一律按递归删 —— 用户已经在确认条上看过「会连内容一起删」。失败项留在选择集里，用户
+         * 可以再来一次；不带「仍然删除」这种整批强制口子：磁盘变过的那几条重新点一次就会拿到新基线，
+         * 比一个能一把推平整批的按钮安全。
+         * @returns 全部处理完即返回。
+         */
+        const runBatchDelete = async () => {
+          const armed = batchRef.current
+          if (armed === null) return
+          const failed = []
+          const parents = new Set()
+          for (const item of armed.items) {
+            const body = { path: item.path }
+            if (item.version !== undefined) body.expectedVersion = item.version
+            if (item.type === 'directory') body.recursive = true
+            const outcome = await postJson(DELETE_URL, body, item.path)
+            if (outcome === null) return
+            parents.add(parentOf(item.path))
+            if (!outcome.ok) failed.push({ path: item.path, code: outcome.code })
+          }
+          setBatch(null)
+          for (const dir of parents) await reloadDir(dir)
+          if (failed.length === 0) {
+            setSelection(new Set())
+            setSelected(root)
+            setBatchFailed(null)
+            notify(t('files.batch.done', { count: armed.items.length }), 'ok')
+            return
+          }
+          // 失败项留在选择里 + 一条带「重试删除」的横幅：每个状态都得有出路，不能只剩一句提示。
+          setSelection(new Set(failed.map((item) => item.path)))
+          setBatchFailed({ failed: failed.length, conflicted: failed.filter((item) => item.code === 'stale-version').length })
+        }
+
+        /** 批量条上的「复制路径」：一条一行写系统剪贴板（写不进去就说一声，静默失败等于没发生）。 */
+        const copySelectionPaths = async () => {
+          const paths = [...selection].sort(compareTreeNames)
+          if (paths.length === 0) return
+          const ok = await writeClipboard(paths.map((path) => copyPathText(path, false, root)).join('\n'))
+          if (!ok) {
+            notify(t('files.copyPath.failed'), 'error', true)
+            return
+          }
+          notify(t('files.batch.copied', { count: paths.length }), 'ok')
         }
 
         /**
@@ -3863,9 +4330,11 @@ window.__ModuleLoader__.load({
         const inputRow = (depth, draft) => h('div', {
           className: 'dsh-wef-row',
           key: `input:${draft.dir}`,
-          style: { paddingLeft: `${String(6 + depth * 14)}px` },
+          style: { paddingLeft: `${String(2 + depth * 14)}px` },
           'data-workspace-editor-files-input-row': draft.mode,
         },
+        // 与真实行对齐：先让出多选框那一段宽度，再让出箭头那一段。
+        h('span', { className: 'dsh-wef-check-gap' }),
         h('span', { className: 'dsh-wef-spacer' }),
         h('span', { className: 'dsh-wef-glyph' }, glyph(draft.mode === 'folder' ? 'folder' : 'file', 14)),
         h('input', {
@@ -3889,20 +4358,32 @@ window.__ModuleLoader__.load({
           onBlur: (event) => { void submitEditor(draft, event.currentTarget.value) },
         }))
 
-        const rowOf = (entry, path, depth) => {
+        /**
+         * 一行。`item` 来自 `foldLevel`：`path` 是**链尾**（折叠行代表它 —— 改名 / 删除 / 新建 /
+         * 拖入都作用在它上面），`chain` 长度大于 1 时标签写成 `a/b/c` 的样子。
+         * @param item - `{ path, entry, chain }`。
+         * @param depth - 缩进层级。
+         * @returns 行元素。
+         */
+        const rowOf = (item, depth) => {
+          const { path, entry, chain } = item
           const isDir = entry.type === 'directory'
           const open = isDir && expanded.has(path)
+          const label = chain.length > 1 ? chain.map(nameOf).join('/') : entry.name
           return h('div', {
             key: path,
             className: 'dsh-wef-row',
             draggable: true,
             'data-workspace-editor-files-row': path,
             'data-kind': entry.type,
-            'data-selected': selected === path ? 'true' : 'false',
+            'data-selected': selection.has(path) ? 'true' : 'false',
+            'data-anchor': selected === path ? 'true' : 'false',
+            'data-hidden': isHiddenName(entry.name) ? 'true' : 'false',
+            'data-chain': chain.length > 1 ? chain.slice(1).map(nameOf).join('/') : undefined,
             'data-busy': busy === path ? 'true' : 'false',
             'data-drop': dropOn === path ? 'true' : 'false',
-            style: { paddingLeft: `${String(6 + depth * 14)}px` },
-            onClick: () => { activate(path, entry.type) },
+            style: { paddingLeft: `${String(2 + depth * 14)}px` },
+            onClick: (event) => { activate(path, entry.type, event) },
             onContextMenu: (event) => { openMenu(event, path, entry.type) },
             onDragStart: (event) => {
               dragRef.current = path
@@ -3935,6 +4416,23 @@ window.__ModuleLoader__.load({
               void moveEntry(from, `${path}/${nameOf(from)}`)
             },
           },
+          // 多选框：常显，不靠悬停、也不要求用户知道 Ctrl+点。点它 = 切换这一行的选中，
+          // 与 Ctrl/Cmd+点 走同一个 `toggleSelection`（约束 16：一套实现、多个入口）。
+          h('button', {
+            type: 'button',
+            className: 'dsh-wef-check',
+            tabIndex: -1,
+            title: t('files.check'),
+            'aria-label': t('files.check'),
+            'aria-pressed': selection.has(path) ? 'true' : 'false',
+            'data-checked': selection.has(path) ? 'true' : 'false',
+            'data-workspace-editor-files-check': path,
+            onClick: (event) => {
+              event.stopPropagation()
+              toggleSelection(path)
+            },
+          // 字形用文本而不是 SVG：未勾选时 `color:transparent` 把它藏掉，勾上才显出来。
+          }, selection.has(path) ? '✓' : ''),
           isDir
             ? h('button', {
               type: 'button',
@@ -3945,7 +4443,7 @@ window.__ModuleLoader__.load({
             }, glyph(open ? 'chevronOpen' : 'chevronClosed', 14))
             : h('span', { className: 'dsh-wef-spacer' }),
           h('span', { className: 'dsh-wef-glyph' }, glyph(isDir ? 'folder' : 'file', 14)),
-          h('span', { className: 'dsh-wef-name' }, entry.name),
+          h('span', { className: 'dsh-wef-name' }, label),
           h('span', { className: 'dsh-wef-actions' },
             isDir && h('button', {
               type: 'button',
@@ -3992,7 +4490,15 @@ window.__ModuleLoader__.load({
           }, glyph('more', 14)))
         }
 
-        /** 把一个目录的可见内容压平进 `rows`（递归，只走展开着的目录）。 */
+        /** 可见行的路径，按渲染顺序：Shift 范围选择拿它当坐标（`rangeSelection`）。 */
+        const visiblePaths = []
+
+        /**
+         * 把一个目录的可见内容压平进 `rows`（递归，只走展开着的目录）。
+         * @param dir - 目录的绝对路径。
+         * @param depth - 缩进层级。
+         * @returns 无。
+         */
         const walk = (dir, depth) => {
           const level = levels[dir]
           if (level === undefined || level.phase === 'loading') {
@@ -4004,23 +4510,28 @@ window.__ModuleLoader__.load({
             return
           }
           if (createHere === dir) rows.push(inputRow(depth, editor))
-          if (level.entries.length === 0 && createHere !== dir) {
+          const items = foldLevel(dir, sortEntries(level.entries, sort), (path) => levels[path]?.entries)
+          if (items.length === 0 && createHere !== dir) {
             rows.push(h('p', { className: 'dsh-wef-note', key: `empty:${dir}` }, t('files.empty')))
           }
-          for (const entry of level.entries) {
-            const path = `${dir}/${entry.name}`
+          for (const item of items) {
+            const path = item.path
+            visiblePaths.push(path)
             if (editor !== null && editor.mode === 'rename' && editor.path === path) {
               rows.push(inputRow(depth, editor))
               continue
             }
-            rows.push(rowOf(entry, path, depth))
-            if (entry.type === 'directory' && expanded.has(path)) walk(path, depth + 1)
+            rows.push(rowOf(item, depth))
+            if (item.entry.type === 'directory' && expanded.has(path)) walk(path, depth + 1)
           }
           if (level.truncated) {
             rows.push(h('p', { className: 'dsh-wef-note', key: `truncated:${dir}` }, t('files.truncated')))
           }
         }
         walk(root, 0)
+
+        /** 可见行是不是全勾上了：决定表头那颗全选框画 ✓ 还是画一条半选横线。 */
+        const allVisibleSelected = visiblePaths.length > 0 && visiblePaths.every((path) => selection.has(path))
 
         /** 一个路径是不是目录：根永远是；其余看它父级列表里的那条记录。 */
         const isDirPath = (path) => {
@@ -4107,7 +4618,62 @@ window.__ModuleLoader__.load({
             'data-workspace-editor-files-refresh': '',
             disabled: busy !== null,
             onClick: () => { void reloadDir(targetDir) },
-          }, glyph('refresh'))),
+          }, glyph('refresh')),
+          // 排序入口：只改渲染顺序，不重新读盘（`levels` 里存的是原始顺序）。
+          h('button', {
+            type: 'button',
+            className: 'dsh-wef-tool',
+            title: t('files.sort'),
+            'data-workspace-editor-files-sort': sort.key,
+            'data-workspace-editor-files-sort-dirs': sort.dirsFirst === false ? 'off' : 'on',
+            onClick: (event) => {
+              event.stopPropagation()
+              setMenu(null)
+              setSortOpen((prev) => (prev === null ? menuAnchorFor(event) : null))
+            },
+          }, glyph('sort'))),
+        // 批量条：**勾了至少一项就出现**（勾选框是主入口，只勾一个也得拿到批量操作）。
+        // 最左那颗是全选框，与每行的勾选框纵向对齐 —— 多选相关的东西全部靠左，不跑到右边。
+        selection.size >= 1 && h('div', {
+          className: 'dsh-wef-batch',
+          'data-workspace-editor-files-batch': String(selection.size),
+        },
+        h('button', {
+          type: 'button',
+          className: 'dsh-wef-check',
+          title: t('files.batch.selectAll'),
+          'aria-label': t('files.batch.selectAll'),
+          'aria-pressed': allVisibleSelected ? 'true' : 'false',
+          'data-checked': allVisibleSelected ? 'true' : 'partial',
+          'data-workspace-editor-files-batch-all': '',
+          onClick: () => {
+            // 已全选 → 清空；否则全选**可见行**（与 Ctrl/Cmd+A 同一口径，不是整个工作区）。
+            setSelection(allVisibleSelected ? new Set() : new Set(visiblePaths))
+          },
+        // 全选框永远画得出来：全选是 ✓，半选是一条横线。
+        }, allVisibleSelected ? '✓' : '−'),
+        h('span', { className: 'dsh-wef-batch-text' }, t('files.batch.count', { count: selection.size })),
+        h('span', { className: 'dsh-wef-batch-fill' }),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-workspace-editor-files-batch-copy': '',
+          onClick: () => { void copySelectionPaths() },
+        }, t('files.batch.copyPaths')),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-danger': 'true',
+          'data-workspace-editor-files-batch-delete': '',
+          disabled: busy !== null,
+          onClick: () => { void armBatchDelete() },
+        }, t('files.batch.delete')),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-workspace-editor-files-batch-clear': '',
+          onClick: () => { setSelection(new Set()) },
+        }, t('files.batch.clear'))),
         error !== null && h('p', {
           className: 'dsh-wef-banner',
           'data-tone': 'error',
@@ -4158,11 +4724,64 @@ window.__ModuleLoader__.load({
           'data-workspace-editor-files-confirm-cancel': '',
           onClick: () => { setPending(null) },
         }, t('files.cancel'))),
+        // 批量删除的确认条：与单条确认条同一处渲染，两者互斥（`armBatchDelete` 会先清 `pending`）。
+        batch !== null && h('p', {
+          className: 'dsh-wef-banner',
+          'data-tone': 'warn',
+          'data-workspace-editor-files-batch-confirm': String(batch.items.length),
+        },
+        h('span', { className: 'dsh-wef-banner-text' },
+          t(batch.items.some((item) => item.type === 'directory') ? 'files.confirmDeleteManyDirs' : 'files.confirmDeleteMany', {
+            count: batch.items.length,
+            dirs: batch.items.filter((item) => item.type === 'directory').length,
+          })),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-danger': 'true',
+          'data-workspace-editor-files-batch-confirm-go': '',
+          disabled: busy !== null,
+          onClick: () => { void runBatchDelete() },
+        }, t('files.delete')),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-workspace-editor-files-batch-confirm-cancel': '',
+          onClick: () => { setBatch(null) },
+        }, t('files.cancel'))),
+        // 批量删除部分失败：失败项还在选择里，这条横幅给一条明确的出路（重试会重新取版本基线）。
+        batchFailed !== null && h('p', {
+          className: 'dsh-wef-banner',
+          'data-tone': 'error',
+          'data-workspace-editor-files-batch-failed': String(batchFailed.failed),
+        },
+        h('span', { className: 'dsh-wef-banner-text' },
+          t('files.batch.failed', { failed: batchFailed.failed, conflicted: batchFailed.conflicted })),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-workspace-editor-files-batch-retry': '',
+          disabled: busy !== null,
+          onClick: () => { void armBatchDelete() },
+        }, t('files.batch.retry')),
+        h('button', {
+          type: 'button',
+          className: 'dsh-we-open',
+          'data-workspace-editor-files-batch-failed-dismiss': '',
+          onClick: () => { setBatchFailed(null) },
+        }, t('files.cancel'))),
         h('div', {
           className: 'dsh-wef-body',
           tabIndex: 0,
           ref: bodyRef,
           'data-drop': dropOn === root ? 'true' : 'false',
+          // 点空白处收掉选区与浮层；点行 / 点按钮不算（`target === currentTarget` 才是真·空白）。
+          onClick: (event) => {
+            if (event.target !== event.currentTarget) return
+            setSelection(new Set())
+            setMenu(null)
+            setSortOpen(null)
+          },
           // F2 = 重命名当前选中行（VS Code 的习惯）；Ctrl/Cmd+C/X = 把选中行放进内部剪贴板
           // （Ctrl/Cmd+V 走 `paste` 事件，见根节点上的 onPaste）；Esc 收起一切浮层。
           // 输入框里的按键归输入框自己管。
@@ -4183,10 +4802,19 @@ window.__ModuleLoader__.load({
               else cutToClipboard(selected)
               return
             }
+            if ((event.ctrlKey || event.metaKey) && event.key === 'a') {
+              // 全选**可见行**（不是整个工作区）：与 Shift 范围选择同一套坐标，用户看到什么就选什么。
+              event.preventDefault()
+              setSelection(new Set(visiblePaths))
+              return
+            }
             if (event.key === 'Escape') {
               setMenu(null)
               setEditor(null)
               setPending(null)
+              setBatch(null)
+              setSortOpen(null)
+              setSelection(new Set())
             }
           },
           onDragOver: (event) => {
@@ -4230,6 +4858,38 @@ window.__ModuleLoader__.load({
         menuItem('copy-path-relative', 'path', menu.path, t('files.copyPathRelative'), () => { void copyPath(menu.path, true) }, false),
         menuItem('open-terminal', 'terminal', menu.path, t('files.openTerminal'), (event) => { void openInTerminal(menu.path, event?.currentTarget ?? null) }, false),
         menuItem('delete', 'trash', menu.path, t('files.delete'), () => { void armDelete(menu.path, menu.type) }, false, true)),
+        // 排序菜单：与行菜单同一套外观，位置来自按钮的视口坐标（`menuAnchorFor`）。
+        sortOpen !== null && h('div', {
+          className: 'dsh-wef-backdrop',
+          'data-workspace-editor-files-sort-backdrop': '',
+          onClick: () => { setSortOpen(null) },
+          onContextMenu: (event) => { event.preventDefault(); setSortOpen(null) },
+        }),
+        sortOpen !== null && h('div', {
+          className: 'dsh-wef-menu',
+          style: { left: `${String(sortOpen.x)}px`, top: `${String(sortOpen.y)}px` },
+          'data-workspace-editor-files-sort-menu': sort.key,
+        },
+        ...TREE_SORT_KEYS.map((key) => h('button', {
+          key,
+          type: 'button',
+          className: 'dsh-wef-menu-item',
+          'data-workspace-editor-files-sort-key': key,
+          'data-active': sort.key === key ? 'true' : 'false',
+          onClick: () => { setSort({ ...sort, key }); setSortOpen(null) },
+        },
+        h('span', { className: 'dsh-wef-menu-check' }, sort.key === key ? '✓' : ''),
+        t(key === 'type' ? 'files.sort.type' : 'files.sort.name'))),
+        h('div', { className: 'dsh-wef-menu-sep', key: 'sort-sep' }),
+        h('button', {
+          key: 'sort-dirs',
+          type: 'button',
+          className: 'dsh-wef-menu-item',
+          'data-workspace-editor-files-sort-dirs-first': sort.dirsFirst === false ? 'off' : 'on',
+          onClick: () => { setSort({ ...sort, dirsFirst: sort.dirsFirst === false }); setSortOpen(null) },
+        },
+        h('span', { className: 'dsh-wef-menu-check' }, sort.dirsFirst === false ? '' : '✓'),
+        t('files.sort.dirsFirst'))),
         busy !== null && h('p', { className: 'dsh-wef-status', 'data-workspace-editor-files-busy': '' }, t('files.busy')),
         // 剪贴板横幅：不是「正在处理」，而是「贴的时候会贴什么」，所以单独一行、带一个清空按钮。
         clipboard !== null && h('p', {
@@ -4424,3 +5084,4 @@ window.__ModuleLoader__.load({
     return { name: 'workspace-editor', inject, apply }
   },
 })
+})()

@@ -39,6 +39,14 @@
 | `index.js` | **重启 Harness**（本目录不在 HMR 监视集内，禁用 / 启用插件只会重挂 fiber，不会重新 `import()` 模块） |
 | `cordis.patch.yml` / `package.json` 的 `dsh.*` | 重启 Harness |
 
+**但「装进 profile / 启停插件行」本身是热应用的**（2026-10-17 实测，宿主全程没重启）：
+`dsh plugin --profile web add <本仓库>` 之后六条路由立刻回 403（未认证被围栏挡 = 已注册），在
+profile 的 `cordis.patch.yml` 里给 `- id: workspace-editor` 加 `disabled: true` 后同一批路由变
+200（SPA 兜底 = 未注册），摘掉这块又回 403。所以：**新装载与启停不用重启**；上面那行「重启
+Harness」只针对**改自己 `index.js` 的内容** —— 那个模块已经被 `import()` 过，禁用再启用只会重挂
+fiber，不会重新读盘。判据（可直接 curl，无需认证）：`GET /workspace-editor/write` 回 **403 = Host
+半边在位**，回 **200 = 没加载**；对照 `GET /workspace-editor/随便一个不存在的名字` 恒为 200。
+
 ## 文件地图
 
 | 文件 | 作用 |
@@ -69,7 +77,13 @@ contains → 自判 sandboxPolicy）→ `entryNoFollow` → `requireParentDirect
 `inputTargets` / `filesClipboard` / `CSS`）→ 文案 `zh` / `en` → 地址与纯工具
 （`addressParts` / `parseSessionFileAddress` / `absoluteFileAddress` / `fileNameOf` / `paneTarget` /
 `relativizeToCwd` / `lineNumberOf` / `lineReferenceToken` / `menuAnchorFor` / `sessionCwd` /
-`writeClipboard` / `readClipboard`）→ **粘贴 / 终端命令纯函数区**（`/* paste:start */` …
+`writeClipboard` / `readClipboard`）→ **路径工具区**（`/* path-tools:start */` …
+`/* path-tools:end */`：`shortenPath`，**必须留在工厂作用域** —— 它被 `EditorSurface` 与
+`ImageBody` 共用）→ **文件树纯函数区**（`/* tree:start */` …
+`/* tree:end */`：`TREE_SORT_KEYS` / `DEFAULT_TREE_SORT` / `TREE_CHAIN_MAX` /
+`TREE_PRELOAD_BUDGET` / `extensionOf` / `isHiddenName` / `compareTreeNames` / `sortEntries` /
+`foldLevel` / `chainCandidates` / `rangeSelection` / `pruneForBatchDelete`）→
+**粘贴 / 终端命令纯函数区**（`/* paste:start */` …
 `/* paste:end */`：`PASTE_EXTENSIONS` / `base64OfBytes` / `pastedNameFor` / `clipboardFilesOf` /
 `shellQuotePath` / `IMAGE_MEDIA_TYPES` / `imageMediaTypeOf`）→
 **语法高亮区**（`/* highlight:start */` …
@@ -194,6 +208,42 @@ Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵�
     另外：`paste` 事件里**纯文本一律 `return`（不 `preventDefault`）**，目录要明确说「不支持」
     （浏览器拿得到目录入口、拿不到内容）—— 别顺手把它做成「贴文本建文件」，那是另一个需求。
 
+22. **文件树的「光标」与「勾选」是两个字段，且勾选只由显式入口产生**：`selected`（光标 / 锚点，
+    工具条 / F2 / Shift 范围都从它出发，视觉上是一圈虚线 `data-anchor`）与 `selection`（勾选集，
+    视觉上是实心 ✓ + 行背景 + 左侧色带）。**行左侧的常显勾选框是主入口**（悬停才出现的按钮等于
+    没有按钮）；`Ctrl/Cmd+点` 与它共用 `toggleSelection`；`Shift+点` 按可见行取范围；
+    `Ctrl/Cmd+A` 全选可见行；**普通单击只挪光标并清空勾选**（不产生勾选）；**右键不碰勾选集**。
+    批量条门槛是 **≥1**（勾一个就得拿到批量操作），最左那颗是全选框（✓ / −  两态）。
+    **不带修饰键的点击必须保持老语义**（目录展开 / 文件进编辑器）；Ctrl / Shift / 勾选框都**不许
+    打开文件页签**。Shift 范围与全选的坐标是**当前渲染出来的可见行**（`walk` 收集的
+    `visiblePaths`）—— 折叠起来的子树不在范围里，**改排序会改范围落点**，这是刻意的。
+    勾选框与展开箭头**必须 `stopPropagation`**，否则点一下勾选框会顺手展开目录 / 打开文件。
+
+23. **排序在渲染时做，折叠只用读过的层级**：`levels[dir].entries` 存后端原始顺序，排序在 `walk` 里
+    用 `sortEntries(entries, sort)` —— 换排序键**不许触发读盘**。名字比较**不用 `localeCompare`**
+    （locale 相关，会让同一棵树在不同机器上顺序不同，而顺序是范围选择的坐标）。目录链折叠的
+    **行代表链尾**（`chain` 最后一项就是行的 `path`），改名 / 删除 / 新建 / 拖入都作用在它上面；
+    为发现链而做的预读（`chainCandidates` + `preloadDir`）必须：① 每个路径只试一次（`preloaded`
+    记账，失败不重试）；② 受 `TREE_PRELOAD_BUDGET` 限制；③ **不给预读目录订阅变更**（订阅只给
+    展开着的目录）；④ 隐藏项不计入「唯一子项」判定。
+
+24. **批量删除不许有「整批无条件」的口子**：先 `pruneForBatchDelete` 收敛选择集（父目录已选中就
+    去掉子项、工作区根不删）→ **一次确认** → **逐条取版本基线**（每条路径各自的令牌）→ **逐条
+    串行**发 `POST /workspace-editor/delete`（目录带 `recursive`）。部分失败必须：失败项**留在
+    选择里** + 一条带「重试删除」的横幅（重试重新取基线）。**不要**加一个「整批仍然删除」按钮，
+    也不要为了快改成并发。
+
+25. **`client.js` 的顶层只允许注释 + 一个 IIFE，别的什么都不许放**：宿主
+    `@deepseek-ai/dsh-client-modules` 的 `buildComboScript` 把 profile 里**所有** client bundle
+    的源码**直接拼成一个 classic script**（`source += resource.source + ';\n'`），**不按包加作用域
+    隔离** —— 所有插件的顶层词法声明共享同一个全局作用域。两个插件各写一个同名顶层
+    `const PACKAGE_NAME`，整条 combo 就抛 `SyntaxError: Identifier … has already been declared`，
+    于是**一个 bundle 都不注册**，页面只报「loaded without registering … via
+    `__ModuleLoader__.load`」，**完全看不出是跟别的插件撞了名**（真踩过：与
+    `@dongasai/dsh-sidebar-terminal` 相撞，表现为整个插件加载失败并被用户在 profile 里关掉）。
+    所以：① 新常量一律放 IIFE 内部；② 改完跑 `reference/probes/combo-scope.mjs`（它按宿主的
+    拼法把 profile 里全部 bundle 拼起来解析，并会点名是哪两个包撞名）。
+
 ## 代码风格
 
 - 中文 JSDoc（`@param` / `@returns` / `@throws`）；注释解释**为什么** —— 尤其是反直觉的取舍
@@ -204,7 +254,10 @@ Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵�
   （`'…'` 包着 `"…"`），这是刻意的，不要「统一」成单引号。
 - 组件用 `React.createElement`（`h`），不用 JSX —— 这个 bundle 没有构建步骤。
 - 样式只挂组件本地 `<style>` 且只用主题令牌（`--dsw-alias-*`），不要引外部样式表、不要写死
-  颜色。
+  颜色；**但选中态这类关键反馈要带硬编码兜底色**（`var(--dsw-alias-brand-primary,#4d6bfe)`）——
+  皮肤能把那个变量改成和常态没区别（真踩过：orca-link 皮肤下多选完全没有视觉反馈）。
+  **`CSS` 是模板字符串：里面任何注释都不许出现反引号**（`--dsw-alias-*` 这种写法会提前终止模板，
+  表现为 `SyntaxError: Invalid left-hand side expression in postfix operation`）。
 - 给测试 / 调试用的钩子一律走 `data-workspace-editor-*` 属性，不要用 `class` 选择器或
   可见文案当锚点。
 
@@ -228,6 +281,39 @@ node --check client.js
 挑文件 / 认目录」。组件那一层（菜单、Ctrl+C/X/V、工具条、剪贴板横幅）用**真 jsdom + 真 React**
 把真 `client.js` 挂起来跑同一份断言脚本；本机 Chrome 在 DSH 的 bwrap 沙箱里起不来，真浏览器 +
 真系统剪贴板那一段只能走 README 的手工清单。
+
+动了文件树的**排序 / 折叠 / 选择 / 批量删除**：`/* tree:start */` … `/* tree:end */` 之间同样是
+**纯函数**（`sortEntries` / `foldLevel` / `chainCandidates` / `rangeSelection` / `pruneForBatchDelete`），
+整段截出来在 Node 里断言：排序键与「大小写不敏感 + 码点决胜」、链折叠的每个停条件（两个子项 /
+隐藏项不算唯一 / 未加载就地停 / `TREE_CHAIN_MAX` 上限）、范围选择的正反两个方向与锚点失效、
+批量删除的选择集收敛（父目录覆盖子项、根不删、浅的在前）。交互那一层用**迷你 React 运行时**
+把真 `client.js` 的 `FilesPanel` 挂起来跑状态机：`Ctrl` / `Shift` / `Esc` / `Ctrl+A` 的选择语义、
+批量条门槛、批量删除的逐条版本闸与部分失败重试、排序菜单不触发读盘、折叠预读的收敛与预算。
+本机没有 `react` / `jsdom`（宿主的 `node_modules` 里也没有），探针自带一个够用的运行时 —— 它必须
+按组件树路径分表存 hook 槽位、给 `useCallback` / `useMemo` 做依赖记忆、递归渲染子元素，否则探针
+自己的缺陷会误判被测代码。**探针必须能抓 bug**：改完至少做一次变异测试（把关键判断改坏，确认探针
+变红再改回来）。
+
+**「全绿」不等于有效 —— 探针自己有 bug 时会假绿**（2026-10-17 ~ 10-18 连着踩到两次，都是真的）：
+
+- **案例一（探针的分支写错）**：迷你 React 里给节点挂 `parent` 的那段写成
+  `if (Array.isArray(child)) for (…) if (…) …; else if (…) …` —— `else` 绑到了**内层** `if`，
+  非数组的 child 整个分支被跳过，`parent` 永远是 `null`、冒泡链形同虚设。于是「勾选框漏了
+  `stopPropagation`」这种真 bug 探针完全看不见，还报了 66/66 全绿。
+- **案例二（探针覆盖面不够，而 `node --check` 也帮不上）**：把 `shortenPath` 放进
+  `createFilesPanel` 内部的 `/* tree */` 区，而调用它的是 `EditorSurface` 与 `ImageBody`。
+  `node --check` 通过（语法没错）、tree 纯函数探针全绿（它把那段**截出来单独求值**，看不见作用域）、
+  状态机探针全绿（它只挂面板，**从没渲染过那两面**）—— 浏览器里却是渲染期 `ReferenceError` 白屏。
+
+四条硬规矩：
+① **新写一类断言，先证明它抓得住对应的变异**（把被测代码改坏，看它红不红；红了才算这条断言存在）；
+② 探针运行时里的分支**一律带大括号**，禁止 `if … for … if … else` 这种悬挂结构；
+③ 事件派发要**像浏览器** —— 用 `dispatchClick` 这类沿祖先链冒泡的助手，而不是直接调节点自己的
+handler，否则「该不该冒泡」这一整类问题根本进不了视野；
+④ 别用运行时探针去够作用域问题 —— 给编辑器补 `textarea` / `CSS.highlights` / `ResizeObserver`
+一堆 DOM 桩是错路（越补越假，还会 OOM）。用 `reference/probes/scope-check.mjs`：它**不执行任何
+代码**，只用 AST 把「引用处能不能看见那个声明」静态算一遍（当前覆盖 `client.js` + `index.js`
+共 4186 处引用）。**动了任何一侧的作用域、或新增函数级声明，都要跑它。**
 
 命令行能覆盖的注册断言（`cordis_inspect_list` → `cordis_inspect_query`：Host `Config.listConfigs`
 查 Loader 行，Client `Slots.listSubTree` 查槽位占用；外加无认证 POST 被拒、`GET` 得 405）与
@@ -265,6 +351,11 @@ node --check client.js
   「四条实现约束」。
 - 动粘贴 / 剪贴板 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「「文件编辑」面板：浏览器侧
   的设计」里那条粘贴说明与 README 的排错表 / 已知边界 / 手工清单。
+- 动文件树的选择 / 排序 / 折叠 / 批量删除 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的四节
+  （「光标与勾选是两个字段」「批量删除：一次确认、逐条版本闸、失败必须有出路」「排序放在渲染时」
+  「目录链折叠：行代表链尾，预读有预算且不订阅」）+ README 的用法表 / 已知边界 / 手工清单，并核对
+  约束 22-24 是否仍然成立（那三条就是这几件事的契约）。**改勾选交互必须连冒泡断言一起改**
+  （`dispatchClick` 那条链），并重新跑一遍变异测试。
 - 动 tree 的菜单动作（复制路径这类只写系统剪贴板的动作）→ 同样同步上面两处；菜单项一律走
   `menuItem()` 一处声明，别只为右键菜单再写一份（约束 16）。
 - 动图片预览 → 守住「**不注册文档渲染器**」这条：官方已有图片渲染器，接管它就是行为回归；
@@ -281,7 +372,10 @@ node --check client.js
 - 已知边界（1 MiB 编辑上限、高亮 256 KiB / 2 万令牌上限与 Custom Highlight API 前提、
   面板页脚的插件信息依赖 Host 的插件清单（读不到就只显示包名）、没有行号 /
   查找替换 / 多文件、页签顶替而非就地切换、官方文件树仍只读、
-  删除永久且带毫秒级窗口、面板不做多选 / 不复制目录 / 不递归建中间目录、改名的预检窗口、递归
+  删除永久且带毫秒级窗口、面板不复制目录 / 不做下载 / 没有搜索与过滤、多选只认可见行（折叠起来的
+  子树不在范围里，改排序会改范围落点）、排序偏好不持久化、目录链折叠会为探测多读几层（每次挂载
+  上限 64，且这些预读目录不订阅变更，标签可能短暂过期）、批量删除逐条串行（条数多时会有可感耗时）、
+  改名的预检窗口、递归
   删除只盖直接条目、`link:` 下 Host 半边要重启、草稿只在内存里、发送的是纯文本引用而非芯片、
   发送目标恒为当前会话、右键菜单替代原生文本框菜单、插入不聚焦输入框、
   粘贴只收文件且单个 4 MiB 上限、纯文本粘贴不处理、剪贴板里的目录不支持、菜单那条粘贴路丢失
