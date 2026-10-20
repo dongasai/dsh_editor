@@ -369,6 +369,7 @@ window.__ModuleLoader__.load({
       'delete.hint': '删除后无法恢复',
       'files.title': '文件编辑',
       'files.guide': '自带文件树：新建、改名、复制 / 剪切 / 粘贴（含系统剪贴板里的文件）、删除、拖拽移动',
+      'files.dropRoot': '放到这里 = 搬到工作区根目录：{path}',
       'files.shortcut': '打开「文件编辑」面板',
       'files.newFile': '新建文件',
       'files.newFolder': '新建文件夹',
@@ -529,6 +530,7 @@ window.__ModuleLoader__.load({
       'files.copyTo': 'Copy to clipboard',
       'files.cut': 'Cut',
       'files.paste': 'Paste',
+      'files.dropRoot': 'Drop here to move into the workspace root: {path}',
       'files.clipboard': 'Clipboard: {name} ({mode})',
       'files.clipboardClear': 'Clear',
       'files.clipboardMode.copy': 'copy',
@@ -3547,6 +3549,13 @@ window.__ModuleLoader__.load({
         /** 一次性提示：成功自己消失、失败留到用户点掉（共享的状态机，见 `useNotice`）。 */
         const { notice, showNotice, dismissNotice } = useNotice()
         const [dropOn, setDropOn] = React.useState(null)
+        /**
+         * 正在拖的那一行（`null` = 没在拖）。只用来渲染「工作区根」落点条：
+         * **根目录自己没有行**，当树把正文铺满时（长列表），空白的落点区根本看不见，
+         * 于是「拖到根目录」变成一件做不到的事。所以一开始拖就亮一条明确写着根路径的落点条，
+         * 松开即搬到根；拖的东西本来就在根下时不亮（那是空操作）。
+         */
+        const [dragging, setDragging] = React.useState(null)
         /** 右键菜单：`{ path, type, x, y }`；坐标是视口坐标（菜单用 position:fixed）。 */
         const [menu, setMenu] = React.useState(null)
         /** 内部剪贴板的渲染镜像：模块级那份是真相，这里只是为了横幅与菜单跟着变。 */
@@ -4390,6 +4399,16 @@ window.__ModuleLoader__.load({
           const isDir = entry.type === 'directory'
           const open = isDir && expanded.has(path)
           const label = chain.length > 1 ? chain.map(nameOf).join('/') : entry.name
+          /**
+           * 这一行的落点目录：目录行 = 它自己，文件行 = 它**所在的目录**。
+           *
+           * 文件行也算落点是刻意的（VS Code 同款）：否则「搬进这个目录」在长列表里只剩
+           * 「把行拖到目录上」一条路，而根目录**自己没有行** —— 想搬到根就只能找到正文底部的
+           * 空白处，列表一长就根本没有空白。有了这条规则，拖到根下任意一个文件行就是搬到根。
+           */
+          const dropDir = isDir ? path : parentOf(path)
+          /** 这个落点对 `from` 是不是空操作 / 非法（搬到原地、搬进自己子树）。 */
+          const dropBlocked = (from) => from === path || dropDir === parentOf(from) || (isDir && isInside(path, from))
           return h('div', {
             key: path,
             className: 'dsh-wef-row',
@@ -4407,6 +4426,7 @@ window.__ModuleLoader__.load({
             onContextMenu: (event) => { openMenu(event, path, entry.type) },
             onDragStart: (event) => {
               dragRef.current = path
+              setDragging(path)
               try {
                 event.dataTransfer.setData('text/plain', path)
                 event.dataTransfer.effectAllowed = 'move'
@@ -4414,10 +4434,16 @@ window.__ModuleLoader__.load({
                 // 个别浏览器不给写 dataTransfer；移动逻辑只依赖 dragRef，照样可用。
               }
             },
-            onDragEnd: () => { dragRef.current = null; setDropOn(null) },
+            onDragEnd: () => { dragRef.current = null; setDragging(null); setDropOn(null) },
             onDragOver: (event) => {
+              // 指针在这一行上时，落点就**归这一行**：接不接受都要挡住冒泡。
+              // 否则事件继续冒泡到树正文，外层会把它当成「根目录」——高亮跳到根上、松手直接搬去根。
+              event.stopPropagation()
               const from = dragRef.current
-              if (from === null || !isDir || from === path || isInside(path, from)) return
+              if (from === null || dropBlocked(from)) {
+                if (dropOn !== null) setDropOn(null)
+                return
+              }
               event.preventDefault()
               try {
                 event.dataTransfer.dropEffect = 'move'
@@ -4428,12 +4454,14 @@ window.__ModuleLoader__.load({
             },
             onDragLeave: () => { if (dropOn === path) setDropOn(null) },
             onDrop: (event) => {
+              event.stopPropagation()
               const from = dragRef.current
               dragRef.current = null
+              setDragging(null)
               setDropOn(null)
-              if (from === null || !isDir) return
+              if (from === null || dropBlocked(from)) return
               event.preventDefault()
-              void moveEntry(from, `${path}/${nameOf(from)}`)
+              void moveEntry(from, `${dropDir}/${nameOf(from)}`)
             },
           },
           // 多选框：常显，不靠悬停、也不要求用户知道 Ctrl+点。点它 = 切换这一行的选中，
@@ -4801,6 +4829,32 @@ window.__ModuleLoader__.load({
           'data-workspace-editor-files-batch-failed-dismiss': '',
           onClick: () => { setBatchFailed(null) },
         }, t('files.cancel'))),
+        // 「工作区根」落点条：**根目录自己没有行**，长列表里正文底部可能压根没有空白可拖，
+        // 于是「搬到根」变成做不到的事（用户真反馈过）。所以一开始拖就亮这一条，松开即搬到根；
+        // 拖的东西本来就在根下时不亮（那是空操作，亮出来只会误导）。
+        dragging !== null && parentOf(dragging) !== root && h('p', {
+          className: 'dsh-wef-banner',
+          'data-tone': dropOn === root ? 'ok' : 'warn',
+          'data-workspace-editor-files-drop-root': root,
+          // 它自己就是落点：被行盖住时不必指望空白处，指针进到条上就是「搬到根」。
+          onDragOver: (event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            if (dropOn !== root) setDropOn(root)
+          },
+          onDragLeave: () => { if (dropOn === root) setDropOn(null) },
+          onDrop: (event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            const from = dragRef.current
+            dragRef.current = null
+            setDragging(null)
+            setDropOn(null)
+            if (from === null || parentOf(from) === root) return
+            void moveEntry(from, `${root}/${nameOf(from)}`)
+          },
+        },
+        h('span', { className: 'dsh-wef-banner-text' }, t('files.dropRoot', { path: root }))),
         h('div', {
           className: 'dsh-wef-body',
           tabIndex: 0,
@@ -4858,8 +4912,9 @@ window.__ModuleLoader__.load({
           onDrop: (event) => {
             const from = dragRef.current
             dragRef.current = null
+            setDragging(null)
             setDropOn(null)
-            if (from === null) return
+            if (from === null || parentOf(from) === root) return
             event.preventDefault()
             void moveEntry(from, `${root}/${nameOf(from)}`)
           },

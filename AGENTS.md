@@ -244,6 +244,14 @@ Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵�
     所以：① 新常量一律放 IIFE 内部；② 改完跑 `reference/probes/combo-scope.mjs`（它按宿主的
     拼法把 profile 里全部 bundle 拼起来解析，并会点名是哪两个包撞名）。
 
+26. **拖拽落点按「这一行代表哪个目录」算，且行必须挡住冒泡**：目录行 = 它自己，**文件行 = 它
+    所在的目录**（VS Code 同款）。文件行必须算落点，因为**根目录自己没有行** —— 树一长、正文里
+    连空白都没有，只认目录行的话「搬到根」就没入口（用户正是这么反馈的）。行的 `onDragOver` /
+    `onDrop` **一律 `stopPropagation`**：指针在某一行上时落点归那一行，事件冒到正文会被当成
+    「根落点」（高亮跳到根、松手直接搬去根）。另外一开始拖就亮一条「工作区根目录」落点条
+    （`data-workspace-editor-files-drop-root`），那是根唯一**看得见**的落点；拖的东西本来就在
+    根下时不亮。空操作 / 非法落点（自己、原地、把目录拖进自己子树）**不发请求**。
+
 ## 代码风格
 
 - 中文 JSDoc（`@param` / `@returns` / `@throws`）；注释解释**为什么** —— 尤其是反直觉的取舍
