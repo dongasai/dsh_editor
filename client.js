@@ -5425,10 +5425,17 @@ window.__ModuleLoader__.load({
 
       // 「文件编辑」：一个自带文件树的右侧栏工具。没有 patterns —— 它是**页类型**，只能按 kind
       // 打开（guide 卡片 / 快捷键 / 代码），因此不会参与任何文件的自动打开排名。
+      //
+      // `keepMounted`：树状态（展开层、滚动、光标）**都活在组件里**（约束 15），页签一切走就
+      // 卸载，回来时只剩根一层 —— 用户报过「打开一个文件再回来，树缩回去了」。官方的
+      // `keepMounted` 语义正是「访问过一次就把正文留住，靠隐藏 + `inert` 切走」，于是展开状态
+      // 与滚动位置都还在。编辑器 / 图片页签不跟着开：它们每个页签都持有一份正文与高亮层，
+      // 草稿另有模块级 `drafts` 兜着，没必要为了滚动位置把每个页签都常驻。
       ctx.effect(() => ctx.sidebarRightTabs.register({
         id: FILES_TAB_ID,
         kind: FILES_KIND,
         priority: 'builtin',
+        keepMounted: true,
         title: () => t('files.title'),
         guide: [{
           id: 'workspace-editor-files',
