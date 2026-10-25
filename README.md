@@ -22,16 +22,16 @@
 
 ### 1. 装插件
 
-三种装法，按场景选。**都走同一条 pnpm 路径**（`@deepseek-ai/dsh-plugin-manager/operations`，
+四种装法，按场景选。**都走同一条 pnpm 路径**（`@deepseek-ai/dsh-plugin-manager/operations`，
 共用一把 profile 写锁），装完都会出现在侧栏「插件」页的**已安装**列表里。
 
 **都不需要手写注册行**：本包在 `package.json` 里声明了 `dsh.bundle.patch`，只要这个 bundle
 被选中，生效的那一行就来自本包自带的 [cordis.patch.yml](cordis.patch.yml)。命令行（方式二、
-三）安装会顺带把它选进 `dsh.profile.bundles`；Web 上（方式一）是装完点 **立即启用**才选中 ——
+三、四）安装会顺带把它选进 `dsh.profile.bundles`；Web 上（方式一）是装完点 **立即启用**才选中 ——
 不点就只是「装着但没启用」。
 
-本包 `private: true`、未发布到 npm，所以没有「按包名从 registry 装」这条路：spec 要么是本地
-路径，要么是 git 地址。
+本包**已发布到 npm**（`@dongasai/dsh-editor`），所以 spec 有三种写法：包名（走 registry，最省事）、
+git 地址、本地路径。包名这条最稳：npm 上的 tarball 就是同名 tag 的内容，版本号与 tag 逐字对应。
 
 #### 方式一：Web 界面（推荐）
 
@@ -44,7 +44,22 @@ DSH Web → 左侧栏**插件** → **添加插件** → 填入本仓库绝对�
 - 填 git 地址时若 GitHub 连不上，界面会提示**无法访问 GitHub** 并给出改用国内镜像的选项
   （镜像只提供注册表里的包与依赖，不代替 GitHub 仓库下载）。
 
-#### 方式二：命令行 · git 源（分发）
+#### 方式二：命令行 · npm registry（分发，推荐）
+
+```bash
+dsh plugin --profile web add @dongasai/dsh-editor
+# 钉版本
+dsh plugin --profile web add @dongasai/dsh-editor@1.2.0
+```
+
+- 走的是该 profile 里 **pnpm 的 registry 配置**。本机默认的 `registry.npmmirror.com` 是**镜像**，
+  与 npmjs 有同步延迟：刚发的版本可能要先等一会儿才装得到，急用就临时指定
+  `npm_config_registry=https://registry.npmjs.org/ dsh plugin --profile web add @dongasai/dsh-editor`。
+- tarball 里只有运行所需的文件（`index.js` / `client.js` / `cordis.patch.yml` / `locale/*.json` /
+  `icon.svg`，外加 README 与 IMPLEMENTATION.md），**没有任何构建步骤**，装完即用。
+- 钉版本时写的是**包版本**（`@1.2.0`），不是 tag 名；两者逐字对应（`v1.2.0` ↔ `1.2.0`）。
+
+#### 方式三：命令行 · git 源（分发）
 
 ```bash
 dsh plugin --profile web add github:dongasai/dsh_editor
@@ -53,14 +68,14 @@ dsh plugin --profile web add git+https://github.com/dongasai/dsh_editor.git
 ```
 
 `dsh plugin --profile <name> <pnpm args>` 把参数转发给该 profile 目录里的 pnpm。装进来的是
-**副本**：之后改本仓库代码不影响已装的副本（想边改边用就走方式三）。
+**副本**：之后改本仓库代码不影响已装的副本（想边改边用就走方式四）。
 
 - `--profile` **必填**（不写直接报 `required option '--profile <name> not specified'`）；
   `web` 换成你要装进的 profile。
 - **钉版本**：URL 后加 `#`，例如
-  `git+https://github.com/dongasai/dsh_editor.git#v1.1.0`（tag / 分支 / commit 都行）。
-  本仓库当前 tag 是 **`v1.1.0`**，对应 `package.json` 的 `1.1.0` —— 不带 `#` 就跟 `main` 走，
-  每次装到的都可能是新代码（本机开发用方式三的 `link:`，不受影响）。
+  `git+https://github.com/dongasai/dsh_editor.git#v1.2.0`（tag / 分支 / commit 都行）。
+  本仓库当前 tag 是 **`v1.2.0`**，对应 `package.json` 的 `1.2.0` —— 不带 `#` 就跟 `main` 走，
+  每次装到的都可能是新代码（本机开发用方式四的 `link:`，不受影响）。
 - **私有仓库**：`git+ssh://git@github.com/dongasai/dsh_editor.git`（需已配好 SSH key），
   或先把 HTTPS 凭据配好。
 - **必须带 `git+` 或 `github:` 前缀**。`git@github.com:owner/repo.git` 这种 scp 写法不会被认成
@@ -73,7 +88,7 @@ dsh plugin --profile web add git+https://github.com/dongasai/dsh_editor.git
   判定不兼容会回滚 `package.json` 与 `pnpm-lock.yaml` 并打印 `allow-version` 命令。本包没有声明
   任何 DSH peer 依赖，不会触发。
 
-#### 方式三：命令行 · 本地目录（link，开发）
+#### 方式四：命令行 · 本地目录（link，开发）
 
 ```bash
 dsh plugin --profile web add link:/data/ai/dsh/dsh_editor

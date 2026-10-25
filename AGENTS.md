@@ -352,11 +352,17 @@ handler，否则「该不该冒泡」这一整类问题根本进不了视野；
   「「文件编辑」面板：浏览器侧的设计」那一节与 README 面板一节：页脚走 `pluginInfo`
   （`ctx.get('remote.pluginManager')` 现读 + 读到才缓存），**不要在客户端写死版本号**，也
   **不要**把命名空间写进 `inject`（见约束 20）；改 `package.json` 的 `version` 因此不需要动客户端。
-- **发版（改 `package.json` 的 `version`）→ 三处一起动**：`package.json` 的 `version`、
-  附注标签 `v<version>`（逐字对应，本仓库口径是带 `v`、带 patch：`1.1.0` ↔ `v1.1.0`）、
+- **发版（改 `package.json` 的 `version`）→ 四处一起动**：`package.json` 的 `version`、
+  附注标签 `v<version>`（逐字对应，本仓库口径是带 `v`、带 patch：`1.2.0` ↔ `v1.2.0`）、
   [README.md](README.md#L59) 「钉版本」那条里的示例与「本仓库当前 tag 是 …，对应 `package.json`
-  的 …」那一行。推完用 `git ls-remote origin` 核对 `refs/heads/main` 与 `refs/tags/<tag>^{}`
-  指向同一个提交。面板页脚不用动 —— 它从 Host 插件清单现读 `version`。
+  的 …」那一行、**npm registry 上的那一版**（`npm publish --registry https://registry.npmjs.org/`）。
+  推完用 `git ls-remote origin` 核对 `refs/heads/main` 与 `refs/tags/<tag>^{}` 指向同一个提交，
+  再用 `npm view @dongasai/dsh-editor versions --registry https://registry.npmjs.org/` 核对发出
+  去的正是这个版本号。面板页脚不用动 —— 它从 Host 插件清单现读 `version`。
+  npm 这条路的三个坑：① `package.json` 里**不许有 `private: true`**，否则 npm 直接拒发（1.2.0
+  首发时删掉的）；② 本机默认 registry 是只读镜像 `registry.npmmirror.com`，不加 `--registry` 会
+  撞 403 / 假成功；③ 本包带 scope，首发必须 `--access public` —— `publishConfig` 里已经写好，
+  别删。
 - 动 Host 侧的闸 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「一次保存的完整路径」
   （六条路由那张图）、「删除 / 改名 / 建目录 / 复制 / 粘贴上传为什么走 `node:fs`」与
   「四条实现约束」。
