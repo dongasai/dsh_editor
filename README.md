@@ -16,6 +16,13 @@
 - **为什么这么实现** → [IMPLEMENTATION.md](IMPLEMENTATION.md)（设计决策、两半怎么拼起来、
   四条实现约束的来龙去脉）。
 
+**已发布到 npm**：[`@dongasai/dsh-editor`](https://www.npmjs.com/package/@dongasai/dsh-editor)，
+当前 `1.2.0` —— 与 git tag `v1.2.0` 是同一份内容（tarball shasum 一致）。最省事的装法就一条：
+
+```bash
+dsh plugin --profile web add @dongasai/dsh-editor
+```
+
 ## 快速开始
 
 两步：装插件 → 在右侧栏打开一个文件。
@@ -411,6 +418,8 @@ Agent 写文件。
 | 症状 | 原因 | 处置 |
 |---|---|---|
 | 页面报「Failed to load plugins … loaded without registering `@dongasai/dsh-editor` via `__ModuleLoader__.load`」，插件整个不出来 | **跟别的插件撞了顶层变量名**。宿主把 profile 里所有 client bundle **拼成一个 classic script**（不按包隔离作用域），两个插件各有一个同名顶层 `const` 就会让整条 combo 抛 `SyntaxError`、**一个都不注册** —— 而这条报错**完全不提撞名**（真踩过：与 `@dongasai/dsh-sidebar-terminal` 的顶层 `const PACKAGE_NAME` 相撞）。`node --check` 也查不出来，因为单看每个文件语法都是好的 | 跑 `node reference/probes/combo-scope.mjs`：它按宿主的拼法把 profile 里全部 bundle 拼起来解析，并点名是哪两个包撞名。本插件顶层只允许注释 + 一个 IIFE（见 `AGENTS.md` 约束 25） |
+| `dsh plugin --profile web add @dongasai/dsh-editor` 报 `404` / `ERR_PNPM_FETCH_404` | 该 profile 的 pnpm 走的是**镜像 registry**（`registry.npmmirror.com`），刚发的版本还没同步过来；或包名漏了 scope | `npm view @dongasai/dsh-editor version --registry https://registry.npmjs.org/` 先确认线上有；再用 `npm_config_registry=https://registry.npmjs.org/ dsh plugin --profile web add @dongasai/dsh-editor` 装 |
+| 按包名装到了旧版本（比如 `1.1.0`） | 同上：镜像有同步延迟，`@latest` 可能落后一版 | 显式指定 npmjs registry，或钉版本 `@dongasai/dsh-editor@1.2.0` |
 | 打开文件只有只读预览，没有「✎ 编辑」按钮 | 该文件没匹配到任何渲染器，预览头部的 actions 槽位没挂上（没有扩展名的文件是典型） | 换文件名加扩展名，或从「打开方式」下拉选「编辑器」 |
 | 预览工具栏上没有「🗑 删除」按钮 | 同上：这一条也注册在 `sidebar.right.tab.document.actions` 槽位，槽位没挂就没有；编辑器页签里也没有（编辑器不是官方预览） | 回到该文件的预览页签再删，或用终端 / Agent 删 |
 | 删除报「文件已变更，未删除」 | 版本闸生效：从你点「删除」到点「确认删除」之间文件被改过 | 看一眼是不是模型在写；确认要删就再点「仍然删除」 |
@@ -683,6 +692,14 @@ Agent 写文件。
   菜单里的粘贴不可用，键盘 Ctrl/Cmd+V 不受影响。
 - **插入不会替你聚焦输入框**：文本落在输入框里光标上次所在的位置，要接着说事请自己点一下
   输入框（公开面没有「聚焦」这个动作）。
+- **npm 页上的 README 是发版时的快照**：npm 只展示发布时打进 tarball 的那一份，仓库后续改动
+  （包括这份文档）要等下一次发版才同步过去；同理，想装「最后一次发布的版本」而 `main` 已经往前
+  走过时，装到的不会是仓库 HEAD。
+- **npm 版本列表里挂着一个 `0.0.0-stage`**：那是 npm 分段发布（staged publishing）机制的占位版，
+  **不是 `latest`**，按名字装不到它；只影响 `npm view @dongasai/dsh-editor versions` 的输出。
+  想清掉得用交互式 2FA 做 `npm unpublish`（bypass-2FA 令牌被 npm 政策禁止做这种敏感操作）。
+- **默认 registry 是只读镜像**：`registry.npmmirror.com` 与 npmjs 之间有同步延迟（这次实测几分钟
+  就到了，但不保证）。刚发完版急着装，就显式指定 `npm_config_registry=https://registry.npmjs.org/`。
 
 ## 相关文件
 

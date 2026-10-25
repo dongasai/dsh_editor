@@ -363,6 +363,29 @@ handler，否则「该不该冒泡」这一整类问题根本进不了视野；
   首发时删掉的）；② 本机默认 registry 是只读镜像 `registry.npmmirror.com`，不加 `--registry` 会
   撞 403 / 假成功；③ 本包带 scope，首发必须 `--access public` —— `publishConfig` 里已经写好，
   别删。
+
+  **npm 发布的实际机制（2026-10-25 首发踩过一遍，别再猜）**：
+
+  - 账号（`1514582970`，开了 2FA）用带 bypass 的 granular 令牌发布会走**分段发布**：版本先进
+    `Validating`（自动校验，装不到）→ `Pending approval`（装不到）→ 批准后才进 `versions` +
+    `dist-tags`。占位版 **`0.0.0-stage` 就是这个机制的副产物**，不是 `latest`、按名字装不到，
+    别当成发错；它也可能与真版本抢 semver 唯一索引，报 `409 Cannot publish over previously
+    staged version` 就是撞上了它。
+  - **`npm publish` 报错 ≠ 没发出去**。判据永远是注册表里的 `versions` 与 `dist-tags`
+    （`curl -s https://registry.npmjs.org/@dongasai%2fdsh-editor`）；这次本地报 `EROFS`
+    （`~/.npm/_cacache` 只读）时，PUT 其实已经成功、版本已经上线。
+  - `npm stage` 子命令需要 **npm ≥ 11.21**，本机 11.6.2 **没有** —— 用 `npx -y npm@latest stage
+    list|view|approve|reject|download ...`。其中 `publish` / `list` / `view` / `download`
+    **不弹 2FA**，`approve` / `reject` **必须**弹。
+  - **bypass-2FA 的 granular 令牌不能做敏感操作**（npm 2026-07-31 政策）：`unpublish`、改包
+    access、改维护者、建删令牌一律 403；**2027-01 起连「直接发布」也会被收走**，只剩「暂存 +
+    人批准」，CI 自动发布要改用 trusted publishing（OIDC）。`npm login` 的会话令牌相反：能暂存、
+    能直发（直发弹码）、能做上面全部敏感操作 —— 两者用 `--userconfig` 分开，别在 `~/.npmrc`
+    里并存两行 `_authToken`。
+  - 排错时的码义：scope **不存在** → `PUT` 回 **404**（首发时 `@dongasai` 就撞的这个，建了
+    `dongasai` 组织才好）；**无权限** → **403**；**缺动态码** → **401/EPT**；**撞暂存版本** → **409**。
+  - 发版提交 / tag 只代表仓库；**npm 页上的 README 与代码都是那次发布时的快照**，文档改动不重发
+    就不同步 —— 这一条在 README 的「已知边界」里也写了，别只改文档就以为线上跟着变。
 - 动 Host 侧的闸 → 同步 [IMPLEMENTATION.md](IMPLEMENTATION.md) 的「一次保存的完整路径」
   （六条路由那张图）、「删除 / 改名 / 建目录 / 复制 / 粘贴上传为什么走 `node:fs`」与
   「四条实现约束」。
@@ -399,7 +422,9 @@ handler，否则「该不该冒泡」这一整类问题根本进不了视野；
   文件名、内部剪贴板只在内存里且换会话粘贴会被 403 挡下、复制相对路径的基准是工作区根且根
   自己没有行、侧边栏终端一律从工作区根起步（所以「在终端打开」是开完替你敲一条 `cd`，且会往
   shell 发一次输入）、自动 cd 的引号只保证 POSIX shell 与 PowerShell、图片预览只从本插件的
-  文件树进（官方渲染器不动）、tiff / heic 这类不做解码兜底、图片是整份读进内存）写在 README
+  文件树进（官方渲染器不动）、tiff / heic 这类不做解码兜底、图片是整份读进内存、
+  npm 页上的 README 与代码只是那次发布的快照（不重发就不同步）、npm 版本列表里的 `0.0.0-stage`
+  占位版、默认 registry 是只读镜像（刚发版可能装到旧版））写在 README
   末尾；
   **没真正解决之前不要从文档里删掉**。
 - **文档分工别混**：README 只回答「怎么用」（用户视角的问题进排错表 / 已知边界），
