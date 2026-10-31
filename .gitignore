@@ -1,4 +1,6 @@
-# 插件以 `link:` 方式装进 dsh profile，仓库里不需要任何构建产物。
+# 插件以 link: 方式装进 dsh profile。client.js 是 esbuild 产物（宿主直接读盘发出），进仓库；src/client.js 是源码，改源码后跑 `npm run build` 重新生成 client.js。
 node_modules/
 *.log
 .DS_Store
+reference/
+.paste-probe/

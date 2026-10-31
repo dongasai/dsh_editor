@@ -38,6 +38,9 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
+  "scripts": {
+    "build": "node scripts/build-client.mjs"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -50,5 +53,8 @@
         "@deepseek-ai/dsh-api-workspace-files"
       ]
     }
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }
