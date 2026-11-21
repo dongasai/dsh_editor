@@ -17,7 +17,7 @@
   四条实现约束的来龙去脉）。
 
 **已发布到 npm**：[`@dongasai/dsh-editor`](https://www.npmjs.com/package/@dongasai/dsh-editor)，
-当前 `1.2.0` —— 与 git tag `v1.2.0` 是同一份内容（tarball shasum 一致）。最省事的装法就一条：
+当前 `1.3.0` —— 与 git tag `v1.3.0` 是同一份内容（tarball shasum 一致）。最省事的装法就一条：
 
 ```bash
 dsh plugin --profile web add @dongasai/dsh-editor
@@ -56,7 +56,7 @@ DSH Web → 左侧栏**插件** → **添加插件** → 填入本仓库绝对�
 ```bash
 dsh plugin --profile web add @dongasai/dsh-editor
 # 钉版本
-dsh plugin --profile web add @dongasai/dsh-editor@1.2.0
+dsh plugin --profile web add @dongasai/dsh-editor@1.3.0
 ```
 
 - 走的是该 profile 里 **pnpm 的 registry 配置**。本机默认的 `registry.npmmirror.com` 是**镜像**，
@@ -64,7 +64,7 @@ dsh plugin --profile web add @dongasai/dsh-editor@1.2.0
   `npm_config_registry=https://registry.npmjs.org/ dsh plugin --profile web add @dongasai/dsh-editor`。
 - tarball 里只有运行所需的文件（`index.js` / `client.js` / `cordis.patch.yml` / `locale/*.json` /
   `icon.svg`，外加 README 与 IMPLEMENTATION.md），**没有任何构建步骤**，装完即用。
-- 钉版本时写的是**包版本**（`@1.2.0`），不是 tag 名；两者逐字对应（`v1.2.0` ↔ `1.2.0`）。
+- 钉版本时写的是**包版本**（`@1.3.0`），不是 tag 名；两者逐字对应（`v1.3.0` ↔ `1.3.0`）。
 
 #### 方式三：命令行 · git 源（分发）
 
@@ -80,8 +80,8 @@ dsh plugin --profile web add git+https://github.com/dongasai/dsh_editor.git
 - `--profile` **必填**（不写直接报 `required option '--profile <name> not specified'`）；
   `web` 换成你要装进的 profile。
 - **钉版本**：URL 后加 `#`，例如
-  `git+https://github.com/dongasai/dsh_editor.git#v1.2.0`（tag / 分支 / commit 都行）。
-  本仓库当前 tag 是 **`v1.2.0`**，对应 `package.json` 的 `1.2.0` —— 不带 `#` 就跟 `main` 走，
+  `git+https://github.com/dongasai/dsh_editor.git#v1.3.0`（tag / 分支 / commit 都行）。
+  本仓库当前 tag 是 **`v1.3.0`**，对应 `package.json` 的 `1.3.0` —— 不带 `#` 就跟 `main` 走，
   每次装到的都可能是新代码（本机开发用方式四的 `link:`，不受影响）。
 - **私有仓库**：`git+ssh://git@github.com/dongasai/dsh_editor.git`（需已配好 SSH key），
   或先把 HTTPS 凭据配好。
@@ -424,7 +424,7 @@ Agent 写文件。
 |---|---|---|
 | 页面报「Failed to load plugins … loaded without registering `@dongasai/dsh-editor` via `__ModuleLoader__.load`」，插件整个不出来 | **跟别的插件撞了顶层变量名**。宿主把 profile 里所有 client bundle **拼成一个 classic script**（不按包隔离作用域），两个插件各有一个同名顶层 `const` 就会让整条 combo 抛 `SyntaxError`、**一个都不注册** —— 而这条报错**完全不提撞名**（真踩过：与 `@dongasai/dsh-sidebar-terminal` 的顶层 `const PACKAGE_NAME` 相撞）。`node --check` 也查不出来，因为单看每个文件语法都是好的 | 跑 `node reference/probes/combo-scope.mjs`：它按宿主的拼法把 profile 里全部 bundle 拼起来解析，并点名是哪两个包撞名。本插件顶层只允许注释 + 一个 IIFE（见 `AGENTS.md` 约束 25） |
 | `dsh plugin --profile web add @dongasai/dsh-editor` 报 `404` / `ERR_PNPM_FETCH_404` | 该 profile 的 pnpm 走的是**镜像 registry**（`registry.npmmirror.com`），刚发的版本还没同步过来；或包名漏了 scope | `npm view @dongasai/dsh-editor version --registry https://registry.npmjs.org/` 先确认线上有；再用 `npm_config_registry=https://registry.npmjs.org/ dsh plugin --profile web add @dongasai/dsh-editor` 装 |
-| 按包名装到了旧版本（比如 `1.1.0`） | 同上：镜像有同步延迟，`@latest` 可能落后一版 | 显式指定 npmjs registry，或钉版本 `@dongasai/dsh-editor@1.2.0` |
+| 按包名装到了旧版本（比如 `1.2.0`） | 同上：镜像有同步延迟，`@latest` 可能落后一版 | 显式指定 npmjs registry，或钉版本 `@dongasai/dsh-editor@1.3.0` |
 | 打开文件只有只读预览，没有「✎ 编辑」按钮 | 该文件没匹配到任何渲染器，预览头部的 actions 槽位没挂上（没有扩展名的文件是典型） | 换文件名加扩展名，或从「打开方式」下拉选「编辑器」 |
 | 预览工具栏上没有「🗑 删除」按钮 | 同上：这一条也注册在 `sidebar.right.tab.document.actions` 槽位，槽位没挂就没有；编辑器页签里也没有（编辑器不是官方预览） | 回到该文件的预览页签再删，或用终端 / Agent 删 |
 | 删除报「文件已变更，未删除」 | 版本闸生效：从你点「删除」到点「确认删除」之间文件被改过 | 看一眼是不是模型在写；确认要删就再点「仍然删除」 |

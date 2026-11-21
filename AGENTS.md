@@ -361,7 +361,7 @@ handler，否则「该不该冒泡」这一整类问题根本进不了视野；
   （`ctx.get('remote.pluginManager')` 现读 + 读到才缓存），**不要在客户端写死版本号**，也
   **不要**把命名空间写进 `inject`（见约束 20）；改 `package.json` 的 `version` 因此不需要动客户端。
 - **发版（改 `package.json` 的 `version`）→ 四处一起动**：`package.json` 的 `version`、
-  附注标签 `v<version>`（逐字对应，本仓库口径是带 `v`、带 patch：`1.2.0` ↔ `v1.2.0`）、
+  附注标签 `v<version>`（逐字对应，本仓库口径是带 `v`、带 patch：`1.3.0` ↔ `v1.3.0`）、
   [README.md](README.md#L59) 「钉版本」那条里的示例与「本仓库当前 tag 是 …，对应 `package.json`
   的 …」那一行、**npm registry 上的那一版**（`npm publish --registry https://registry.npmjs.org/`）。
   推完用 `git ls-remote origin` 核对 `refs/heads/main` 与 `refs/tags/<tag>^{}` 指向同一个提交，
