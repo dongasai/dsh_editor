@@ -155,6 +155,13 @@ window.__ModuleLoader__.load({
     /** 文件地址前缀（官方 `dsh-resource://file/` 语法）。 */
     const FILE_ADDRESS_PREFIX = 'dsh-resource://file/'
 
+    /**
+     * 官方文档预览的页类型 kind（`dsh-client-ui-sidebar-documentpreview` 的 `textDefinition`）。
+     * 「切回原生预览」要靠它显式点名：编辑器页签的 pattern 命中不了真实地址，不点名的话
+     * `openResource` 的 claim 不会落到官方预览上。
+     */
+    const NATIVE_PREVIEW_KIND = 'text'
+
     /** 默认档扩展名：官方只有只读纯文本 / 代码预览的数据、配置、日志类文件。 */
     const DEFAULT_EXTENSIONS = [
       'txt', 'text', 'log', 'json', 'jsonc', 'json5', 'jsonl', 'ndjson',
@@ -338,6 +345,7 @@ window.__ModuleLoader__.load({
       'viewer.title': '编辑器',
       'tab.title': '编辑 {name}',
       'action.edit': '编辑',
+      'action.nativePreview': '切回原生预览',
       'action.save': '保存',
       'action.saving': '保存中…',
       'action.reload': '重新加载',
@@ -491,6 +499,7 @@ window.__ModuleLoader__.load({
       'viewer.title': 'Editor',
       'tab.title': 'Edit {name}',
       'action.edit': 'Edit',
+      'action.nativePreview': 'Back to native preview',
       'action.save': 'Save',
       'action.saving': 'Saving…',
       'action.reload': 'Reload',
@@ -696,6 +705,22 @@ window.__ModuleLoader__.load({
         .map((segment) => encodeURIComponent(segment).replace(/%3A/giu, ':'))
         .join('/')
       return `${FILE_ADDRESS_PREFIX}absolute/${unc ? '/' : ''}${encoded}`
+    }
+
+    /**
+     * 按官方 `sessionFileAddress` 的语法规整会话内文件地址（逐段 percent 编码、`:` 保留）。
+     *
+     * 编辑器页签用的是 `absolute` 地址（与官方预览不同的 contentId），而官方文档预览的
+     * `canOpen` 只收 `session` 地址 —— 要从编辑器「切回原生预览」就必须换成这种写法，
+     * 否则 `claim()` 不认这个地址、预览页签开不起来。
+     * @param sessionId - 会话 id。
+     * @param path - 绝对路径或工作区相对路径。
+     * @returns `dsh-resource://file/session/<sessionId>/<分段编码路径>`。
+     */
+    function sessionFileAddress(sessionId, path) {
+      const encode = (segment) => encodeURIComponent(segment).replace(/%3A/giu, ':')
+      const normalized = String(path ?? '').replace(/\\/gu, '/').replace(/^(?:\.\/)+/u, '')
+      return `${FILE_ADDRESS_PREFIX}session/${encode(sessionId)}/${normalized.split('/').map(encode).join('/')}`
     }
 
     /**
@@ -1720,11 +1745,11 @@ window.__ModuleLoader__.load({
     function createEditor(ctx) {
       /**
        * 共用的可编辑正文：读盘、草稿、版本闸、冲突处理都在这里。
-       * @param props - `{ t, sessionId, path, wrap, onToggleWrap, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions }`。
+       * @param props - `{ t, sessionId, path, wrap, onToggleWrap, onBackToPreview, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions }`。
        * @returns 编辑区、状态条与横幅。
        */
       function EditorSurface(props) {
-        const { t, sessionId, path, wrap, onToggleWrap, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions } = props
+        const { t, sessionId, path, wrap, onToggleWrap, onBackToPreview, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions } = props
         const storageKey = `${sessionId}\u0000${path}`
         const [doc, setDoc] = React.useState({ phase: 'loading' })
         const [draft, setDraft] = React.useState('')
@@ -2312,6 +2337,16 @@ window.__ModuleLoader__.load({
           }, shortenPath(relativizeToCwd(doc.absolutePath ?? path, sessionCwd(ctx, sessionId)))),
           h('span', { className: 'dsh-we-spacer' }),
           h('span', { className: 'dsh-we-hint', 'data-workspace-editor-hint': '' }, t('hint.save')),
+          // 「切回原生预览」只在编辑器**页签**里出现（DocumentBody 是渲染器模式，正文已经在
+          // 官方预览里了，不需要再切回去）。与预览头部的「✎ 编辑」是一对反向操作：用官方文档
+          // 预览页签顶掉这张编辑器页签；草稿按 module 级 drafts 兜着，不会因此丢。
+          onBackToPreview !== undefined && h('button', {
+            type: 'button',
+            className: 'dsh-we-button',
+            'data-workspace-editor-native-preview': '',
+            title: t('action.nativePreview'),
+            onClick: onBackToPreview,
+          }, t('action.nativePreview')),
           onToggleWrap !== undefined && h('button', {
             type: 'button',
             className: 'dsh-we-button',
@@ -2470,6 +2505,22 @@ window.__ModuleLoader__.load({
         }
         const [wrap, setWrap] = React.useState(true)
         const target = React.useMemo(() => paneTarget(tab, sessionId), [tab, sessionId])
+        /**
+         * 切回官方文档预览：与预览头部的「✎ 编辑」互为反向操作。
+         *
+         * 两个刻意的选择：① 用 `session` 作用域的地址 —— 官方 `text` 页类型的 `canOpen`
+         * 只认 `session` 地址，本插件页签用的 `absolute` 地址在那边会被拒；② `replaceTab`
+         * 顶掉当前这张编辑器页签，不在同一个位置堆两张同文件的页签（原本的预览页签正是在
+         * 「✎ 编辑」时被这张编辑器页签顶掉的）。草稿按模块级 `drafts` 兜着，切走不丢。
+         */
+        const backToPreview = () => {
+          if (target === null) return
+          const tabId = tab?.id
+          ctx.sidebarRight.openResource(sessionFileAddress(target.sessionId, target.path), {
+            kind: NATIVE_PREVIEW_KIND,
+            ...(typeof tabId === 'string' && tabId !== '' ? { replaceTab: tabId } : {}),
+          })
+        }
         if (target === null) {
           return h('div', { className: 'dsh-we-root dsh-we-pane', 'data-workspace-editor': 'unavailable' },
             h('style', null, CSS),
@@ -2482,6 +2533,7 @@ window.__ModuleLoader__.load({
           path: target.path,
           wrap,
           onToggleWrap: () => { setWrap((value) => !value) },
+          onBackToPreview: backToPreview,
           scrollportRef: null,
           reloadKey: 'tab',
           variant: 'dsh-we-pane',

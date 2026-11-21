@@ -18,6 +18,7 @@
         const MAX_PASTE_BYTES = 4 * 1024 * 1024;
         const MAX_EDIT_CHARS = 1024 * 1024;
         const FILE_ADDRESS_PREFIX = "dsh-resource://file/";
+        const NATIVE_PREVIEW_KIND = "text";
         const DEFAULT_EXTENSIONS = [
           "txt",
           "text",
@@ -255,6 +256,7 @@
           "viewer.title": "\u7F16\u8F91\u5668",
           "tab.title": "\u7F16\u8F91 {name}",
           "action.edit": "\u7F16\u8F91",
+          "action.nativePreview": "\u5207\u56DE\u539F\u751F\u9884\u89C8",
           "action.save": "\u4FDD\u5B58",
           "action.saving": "\u4FDD\u5B58\u4E2D\u2026",
           "action.reload": "\u91CD\u65B0\u52A0\u8F7D",
@@ -407,6 +409,7 @@
           "viewer.title": "Editor",
           "tab.title": "Edit {name}",
           "action.edit": "Edit",
+          "action.nativePreview": "Back to native preview",
           "action.save": "Save",
           "action.saving": "Saving\u2026",
           "action.reload": "Reload",
@@ -583,6 +586,11 @@
           const stripped = normalized.replace(/^\/+/u, "");
           const encoded = stripped.split("/").map((segment) => encodeURIComponent(segment).replace(/%3A/giu, ":")).join("/");
           return `${FILE_ADDRESS_PREFIX}absolute/${unc ? "/" : ""}${encoded}`;
+        }
+        function sessionFileAddress(sessionId, path) {
+          const encode = (segment) => encodeURIComponent(segment).replace(/%3A/giu, ":");
+          const normalized = String(path ?? "").replace(/\\/gu, "/").replace(/^(?:\.\/)+/u, "");
+          return `${FILE_ADDRESS_PREFIX}session/${encode(sessionId)}/${normalized.split("/").map(encode).join("/")}`;
         }
         function fileNameOf(address) {
           if (typeof address !== "string" || address === "") return "";
@@ -1645,7 +1653,7 @@
         }
         function createEditor(ctx) {
           function EditorSurface(props) {
-            const { t, sessionId, path, wrap, onToggleWrap, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions } = props;
+            const { t, sessionId, path, wrap, onToggleWrap, onBackToPreview, scrollportRef, reloadKey, variant, onLoaded, onFailed, inputActions } = props;
             const storageKey = `${sessionId}\0${path}`;
             const [doc, setDoc] = React.useState({ phase: "loading" });
             const [draft, setDraft] = React.useState("");
@@ -2131,6 +2139,16 @@
                 }, shortenPath(relativizeToCwd(doc.absolutePath ?? path, sessionCwd(ctx, sessionId)))),
                 h("span", { className: "dsh-we-spacer" }),
                 h("span", { className: "dsh-we-hint", "data-workspace-editor-hint": "" }, t("hint.save")),
+                // 「切回原生预览」只在编辑器**页签**里出现（DocumentBody 是渲染器模式，正文已经在
+                // 官方预览里了，不需要再切回去）。与预览头部的「✎ 编辑」是一对反向操作：用官方文档
+                // 预览页签顶掉这张编辑器页签；草稿按 module 级 drafts 兜着，不会因此丢。
+                onBackToPreview !== void 0 && h("button", {
+                  type: "button",
+                  className: "dsh-we-button",
+                  "data-workspace-editor-native-preview": "",
+                  title: t("action.nativePreview"),
+                  onClick: onBackToPreview
+                }, t("action.nativePreview")),
                 onToggleWrap !== void 0 && h("button", {
                   type: "button",
                   className: "dsh-we-button",
@@ -2318,6 +2336,14 @@
             }
             const [wrap, setWrap] = React.useState(true);
             const target = React.useMemo(() => paneTarget(tab, sessionId), [tab, sessionId]);
+            const backToPreview = () => {
+              if (target === null) return;
+              const tabId = tab?.id;
+              ctx.sidebarRight.openResource(sessionFileAddress(target.sessionId, target.path), {
+                kind: NATIVE_PREVIEW_KIND,
+                ...typeof tabId === "string" && tabId !== "" ? { replaceTab: tabId } : {}
+              });
+            };
             if (target === null) {
               return h(
                 "div",
@@ -2338,6 +2364,7 @@
               onToggleWrap: () => {
                 setWrap((value) => !value);
               },
+              onBackToPreview: backToPreview,
               scrollportRef: null,
               reloadKey: "tab",
               variant: "dsh-we-pane",

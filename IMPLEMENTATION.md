@@ -113,6 +113,14 @@ selected = candidates.find((id) => id === state.rendererId) ?? candidates[0]
 按钮还要知道「顶掉哪张页签」：用 `ctx.sidebarRight.commandTarget(event.currentTarget)` 从按钮
 所在的真实 DOM 位置问出面板与页签（浮动面板里问不到就退回「当前活动的停靠面板」，在旁边开）。
 
+**反向的「切回原生预览」**（2026-11-21 补）：编辑器页签状态条上那颗按钮用官方文档预览
+（`kind: 'text'`，官方 `textDefinition` 的 kind）顶掉当前编辑器页签，与「✎ 编辑」互为反向。
+两个刻意的细节：① 地址必须用 **`session` 作用域**的 `dsh-resource://file/session/<sessionId>/…`
+（官方 `text` 类型的 `canOpen` 只收 `session`，本插件页签用的 `absolute` 地址在那边会被拒）；
+② `replaceTab` 传当前页签 id —— 该文件的预览页签当初正是被这张编辑器页签顶掉的，换回来还是
+同一个位置，不留两张同文件的页签。按钮只挂在 `PaneBody`（编辑器页签）里，`DocumentBody` 正文
+本来就在官方预览里，不需要再切一次。未保存的修改按模块级 `drafts` 兜着，切走不丢。
+
 ### D4 「文件编辑」是一个**页签类型**，不是一个新槽位
 
 右侧栏没有「注册一个工具面板」这种 API，官方「工作区文件」走的是公开两步：

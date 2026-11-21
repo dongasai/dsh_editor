@@ -255,6 +255,14 @@ Range 与 `CSS.highlights`）→ `InputSink`（`conversation.input.dock` 哨兵�
     （`data-workspace-editor-files-drop-root`），那是根唯一**看得见**的落点；拖的东西本来就在
     根下时不亮。空操作 / 非法落点（自己、原地、把目录拖进自己子树）**不发请求**。
 
+27. **「✎ 编辑」与「切回原生预览」必须是一对反向操作**：预览头部按钮用本插件的编辑器页签顶掉
+    预览页签（源地址是 `absolute` 作用域）；编辑器页签状态条上的「切回原生预览」必须用官方文档
+    预览的 kind `text` + **`session` 作用域地址**（`sessionFileAddress`）+ 当前页签 id 作 `replaceTab`
+    顶回去 —— 官方 `text` 类型的 `canOpen` 只认 `session`，用错地址会静默开不出预览页签。按钮只
+    挂在 `PaneBody`，不要给 `DocumentBody`（渲染器正文已经在官方预览里）也加一颗。
+    `client.js` 现在是 `src/client.js` 经 esbuild 的产物：改完源码必须 `npm run build`，只改产物
+    会被下次构建覆盖。
+
 ## 代码风格
 
 - 中文 JSDoc（`@param` / `@returns` / `@throws`）；注释解释**为什么** —— 尤其是反直觉的取舍
