@@ -3779,6 +3779,11 @@ window.__ModuleLoader__.load({
          */
         const preloadDir = async (path) => {
           if (levelsRef.current[path] !== undefined) return
+          // 折叠判定用的是这里的缓存，而缓存一旦过期就会把中间层后来新增的文件永久藏进链里
+          // （用户踩过：探探/糖葫芦 各有 README.md，链却还按「只有一个子目录」折着）。
+          // 所以预读目录也要订阅变更、让列表刷新；但它**不进 expanded、不当成展开层**，
+          // 订阅只是为了折叠数据保鲜，树的行与展开语义一点不变。
+          watchDir(path)
           await reloadDir(path)
         }
 
@@ -3852,13 +3857,26 @@ window.__ModuleLoader__.load({
           }
         }
 
-        /** 展开 / 收起一个目录（首次展开顺手加载 + 订阅）。 */
-        const toggle = (path) => {
+        /**
+         * 展开 / 收起一个目录（首次展开顺手加载 + 订阅）。
+         *
+         * `chain` 是折叠行代表的整条目录链（尾在最后）。展开时把整条链一起展开：用户点开 `a/b/c`
+         * 是想看整条链的内容；这样中间层后来多了文件、链被迫断开时，那层已经在 expanded 里，
+         * 新文件立刻可见，不会随着行数变化「缩回去」（与 `keepMounted` 那次反馈同一个道理）。
+         * @param path - 点的这一行的路径（链尾）。
+         * @param chain - 折叠链；省略时只当普通目录处理。
+         * @returns 无。
+         */
+        const toggle = (path, chain) => {
           ensureDir(path)
+          const paths = chain === undefined || chain.length === 0 ? [path] : chain
           setExpanded((prev) => {
             const next = new Set(prev)
-            if (next.has(path)) next.delete(path)
-            else next.add(path)
+            const open = paths.every((item) => next.has(item))
+            for (const item of paths) {
+              if (open) next.delete(item)
+              else next.add(item)
+            }
             return next
           })
         }
@@ -3924,9 +3942,10 @@ window.__ModuleLoader__.load({
          * @param path - 这一行的路径。
          * @param type - `file` | `directory`。
          * @param event - 点击事件（读修饰键）；缺省按老语义走。
+         * @param chain - 折叠行的整条目录链；普通目录省略。
          * @returns 无。
          */
-        const activate = (path, type, event) => {
+        const activate = (path, type, event, chain) => {
           setError(null)
           setPending(null)
           setBatch(null)
@@ -3945,7 +3964,7 @@ window.__ModuleLoader__.load({
           }
           // 普通单击：只挪光标、清空勾选（勾选是显式意图，不由单击产生）。
           focusPath(path)
-          if (type === 'directory') toggle(path)
+          if (type === 'directory') toggle(path, chain)
           else openFile(path)
         }
 
@@ -4529,7 +4548,7 @@ window.__ModuleLoader__.load({
             'data-busy': busy === path ? 'true' : 'false',
             'data-drop': dropOn === path ? 'true' : 'false',
             style: { paddingLeft: `${String(2 + depth * 14)}px` },
-            onClick: (event) => { activate(path, entry.type, event) },
+            onClick: (event) => { activate(path, entry.type, event, chain) },
             onContextMenu: (event) => { openMenu(event, path, entry.type) },
             onDragStart: (event) => {
               dragRef.current = path
@@ -4594,7 +4613,7 @@ window.__ModuleLoader__.load({
               className: 'dsh-wef-caret',
               tabIndex: -1,
               'aria-label': open ? 'collapse' : 'expand',
-              onClick: (event) => { event.stopPropagation(); toggle(path) },
+              onClick: (event) => { event.stopPropagation(); toggle(path, chain) },
             }, glyph(open ? 'chevronOpen' : 'chevronClosed', 14))
             : h('span', { className: 'dsh-wef-spacer' }),
           h('span', { className: 'dsh-wef-glyph' }, glyph(isDir ? 'folder' : 'file', 14)),

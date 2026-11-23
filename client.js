@@ -3289,6 +3289,7 @@
             }, [root]);
             const preloadDir = async (path) => {
               if (levelsRef.current[path] !== void 0) return;
+              watchDir(path);
               await reloadDir(path);
             };
             React.useEffect(() => {
@@ -3345,12 +3346,16 @@
                 message: typeof payload?.message === "string" ? payload.message : `HTTP ${String(response.status)}`
               };
             };
-            const toggle = (path) => {
+            const toggle = (path, chain) => {
               ensureDir(path);
+              const paths = chain === void 0 || chain.length === 0 ? [path] : chain;
               setExpanded((prev) => {
                 const next = new Set(prev);
-                if (next.has(path)) next.delete(path);
-                else next.add(path);
+                const open = paths.every((item) => next.has(item));
+                for (const item of paths) {
+                  if (open) next.delete(item);
+                  else next.add(item);
+                }
                 return next;
               });
             };
@@ -3383,7 +3388,7 @@
                 return next;
               });
             };
-            const activate = (path, type, event) => {
+            const activate = (path, type, event, chain) => {
               setError(null);
               setPending(null);
               setBatch(null);
@@ -3401,7 +3406,7 @@
                 return;
               }
               focusPath(path);
-              if (type === "directory") toggle(path);
+              if (type === "directory") toggle(path, chain);
               else openFile(path);
             };
             const openMenu = (event, path, type) => {
@@ -3823,7 +3828,7 @@
                   "data-drop": dropOn === path ? "true" : "false",
                   style: { paddingLeft: `${String(2 + depth * 14)}px` },
                   onClick: (event) => {
-                    activate(path, entry.type, event);
+                    activate(path, entry.type, event, chain);
                   },
                   onContextMenu: (event) => {
                     openMenu(event, path, entry.type);
@@ -3894,7 +3899,7 @@
                   "aria-label": open ? "collapse" : "expand",
                   onClick: (event) => {
                     event.stopPropagation();
-                    toggle(path);
+                    toggle(path, chain);
                   }
                 }, glyph(open ? "chevronOpen" : "chevronClosed", 14)) : h("span", { className: "dsh-wef-spacer" }),
                 h("span", { className: "dsh-wef-glyph" }, glyph(isDir ? "folder" : "file", 14)),
