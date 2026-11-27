@@ -4,3 +4,5 @@ node_modules/
 .DS_Store
 reference/
 .paste-probe/
+# 本地草稿 / 备份：client 旧版 bundle、npm 缓存、截图等，不进仓库
+.agents/
